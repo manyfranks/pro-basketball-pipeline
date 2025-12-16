@@ -1,429 +1,506 @@
 # NBA SGP Engine - Design Document
 
-**Version:** 1.0 (POC)
+**Version:** 2.0 (POC Complete)
 **Last Updated:** December 2025
-**Status:** Path B Implementation (No Pipeline)
+**Status:** Signal Framework Implemented, Ready for Production Integration
 
 ---
 
 ## Executive Summary
 
-The NBA SGP Engine applies the **market-first, edge-detection philosophy** from the NFL/NHL SGP engines to NBA player props. We use `nba_api` for player statistics and compare against Odds API lines to find systematic edges.
+The NBA SGP Engine is a **market-first, edge-detection system** for NBA player props. We use `nba_api` for player statistics and compare against Odds API lines to find systematic edges.
 
-**Architecture Decision**: Following the NHL SGP dual-path pattern, we're implementing **Path B** (direct API, no pipeline enrichment) as our POC. This is validated by NHL backtesting showing Path B achieves ~50% baseline, with potential for 52-55% with good signal tuning.
-
-**Key Advantage**: Unlike NHL API, `nba_api` provides rich derived metrics (usage rate, advanced stats) that give us "free" pipeline-like intelligence.
-
----
-
-## 1. Data Provider: nba_api
-
-### 1.1 Installation
-```bash
-pip install nba_api
-```
-
-### 1.2 Key Endpoints
-
-| Endpoint | Purpose | SGP Signal |
-|----------|---------|------------|
-| `playergamelog.PlayerGameLog` | Player game-by-game stats | Trend, Usage |
-| `leaguedashplayerstats.LeagueDashPlayerStats` | League-wide stats, rankings | Matchup, Usage |
-| `teamdashboardbygeneralsplits.TeamDashboardByGeneralSplits` | Team defensive stats | Matchup |
-| `scoreboardv2.ScoreboardV2` | Today's games | Environment |
-| `players.get_active_players()` | Player ID lookup | Utility |
-| `teams.get_teams()` | Team ID lookup | Utility |
-
-### 1.3 Player Game Log Schema
-
-```python
-# From playergamelog.PlayerGameLog
-COLUMNS = [
-    'SEASON_ID', 'Player_ID', 'Game_ID', 'GAME_DATE', 'MATCHUP', 'WL',
-    'MIN',           # Minutes played
-    'FGM', 'FGA', 'FG_PCT',     # Field goals
-    'FG3M', 'FG3A', 'FG3_PCT',  # 3-pointers
-    'FTM', 'FTA', 'FT_PCT',     # Free throws
-    'OREB', 'DREB', 'REB',      # Rebounds
-    'AST',           # Assists
-    'STL',           # Steals
-    'BLK',           # Blocks
-    'TOV',           # Turnovers
-    'PF',            # Personal fouls
-    'PTS',           # Points
-    'PLUS_MINUS'     # Plus/minus
-]
-```
+**Architecture**: Path B (direct API, no pipeline enrichment)
+**Expected Performance**: 50-55% baseline, potential 55-60% with signal tuning
+**Key Advantage**: `nba_api` provides derived metrics (USG_PCT, DEF_RTG, PACE) that give us "free" pipeline-like intelligence
 
 ---
 
-## 2. Odds API → nba_api Mapping
+## Implementation Status
 
-### 2.1 Primary Props
+### Completed
 
-| Odds API Market Key | nba_api Column | Notes |
-|---------------------|----------------|-------|
-| `player_points` | `PTS` | Direct mapping |
-| `player_rebounds` | `REB` | Direct mapping |
-| `player_assists` | `AST` | Direct mapping |
-| `player_threes` | `FG3M` | Direct mapping |
-| `player_blocks` | `BLK` | Direct mapping |
-| `player_steals` | `STL` | Direct mapping |
-| `player_turnovers` | `TOV` | Direct mapping |
-| `player_field_goals` | `FGM` | Direct mapping |
-| `player_frees_made` | `FTM` | Direct mapping |
+| Component | Status | Location |
+|-----------|--------|----------|
+| Signal Framework | ✅ Complete | `src/signals/` |
+| Edge Calculator | ✅ Complete | `src/edge_calculator.py` |
+| Data Provider | ✅ Complete | `src/data_provider.py` |
+| Odds Client | ✅ Complete | `src/odds_client.py` |
+| Demo Script | ✅ Complete | `scripts/demo_edge_analysis.py` |
 
-### 2.2 Combo Props
+### Not Implemented
 
-| Odds API Market Key | nba_api Calculation | Notes |
-|---------------------|---------------------|-------|
-| `player_points_rebounds_assists` | `PTS + REB + AST` | PRA |
-| `player_points_rebounds` | `PTS + REB` | |
-| `player_points_assists` | `PTS + AST` | |
-| `player_rebounds_assists` | `REB + AST` | |
-| `player_blocks_steals` | `BLK + STL` | Stocks |
-
-### 2.3 Special Props
-
-| Odds API Market Key | nba_api Calculation | Notes |
-|---------------------|---------------------|-------|
-| `player_double_double` | 2+ of (PTS≥10, REB≥10, AST≥10, STL≥10, BLK≥10) | Boolean |
-| `player_triple_double` | 3+ of above | Boolean |
-| `player_first_basket` | N/A | Cannot predict from historical |
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Injury Checker | ⚠️ Stubbed | Needs ESPN/Rotowire integration |
+| Orchestration Script | ❌ Not started | Daily run pipeline |
+| Database Loader | ❌ Not started | Supabase integration |
+| Scheduler | ❌ Not started | Railway cron |
+| Parlay Builder | ❌ Not started | SGP construction |
 
 ---
 
-## 3. Architecture (Path B)
+## 1. Architecture
 
-### 3.1 Why Path B?
+### 1.1 Path B Decision
 
-Per NHL SGP learnings, we have two architecture options:
+| Path | Description | Hit Rate | Chosen |
+|------|-------------|----------|--------|
+| **A** | Pipeline enrichment + Odds | 60-65% | No |
+| **B** | Direct API + Odds | 50-55% | **Yes** |
 
-| Path | Description | Expected Hit Rate |
-|------|-------------|-------------------|
-| **A** | Pipeline enrichment + Odds | 60-65% (validated in NHL) |
-| **B** | Direct API + Odds | 50-55% baseline |
+**Rationale**: No existing NBA pipeline. `nba_api` provides rich derived metrics that approach Path A quality.
 
-We're starting with **Path B** because:
-1. No existing NBA pipeline to leverage
-2. `nba_api` provides richer data than NHL API (usage rate, etc.)
-3. Faster POC - validate before investing in pipeline build
-
-### 3.2 Data Flow
+### 1.2 Data Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     NBA SGP ENGINE (Path B)                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  Odds API → nba_api Direct → 6 Signals → Edge Calculation       │
-│             ↑                                                    │
-│             │ PlayerGameLog (trend, usage)                       │
-│             │ LeagueDashPlayerStats (rankings, USG_PCT)          │
-│             │ TeamDashboard (opponent defense)                   │
-│             │ ScoreboardV2 (B2B detection)                       │
-│             │                                                    │
-│             └── nba_api provides "free" derived intelligence     │
+│  ┌────────────┐    ┌─────────────────┐    ┌────────────────┐    │
+│  │ Odds API   │    │    nba_api      │    │  Injury Data   │    │
+│  │            │    │                 │    │   (STUBBED)    │    │
+│  │ - Props    │    │ - PlayerGameLog │    │                │    │
+│  │ - Lines    │    │ - LeagueStats   │    │                │    │
+│  │ - Totals   │    │ - TeamStats     │    │                │    │
+│  └─────┬──────┘    └────────┬────────┘    └───────┬────────┘    │
+│        │                    │                     │              │
+│        └────────────────────┼─────────────────────┘              │
+│                             ▼                                    │
+│                  ┌─────────────────────┐                         │
+│                  │   DATA AGGREGATOR   │                         │
+│                  │                     │                         │
+│                  │ Build PropContext   │                         │
+│                  │ for each player/prop│                         │
+│                  └──────────┬──────────┘                         │
+│                             │                                    │
+│         ┌───────────────────┼───────────────────┐                │
+│         ▼                   ▼                   ▼                │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│  │ LINE VALUE  │    │   TREND     │    │   USAGE     │          │
+│  │   (30%)     │    │   (20%)     │    │   (20%)     │          │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘          │
+│         │                  │                  │                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐          │
+│  │  MATCHUP    │    │ ENVIRONMENT │    │ CORRELATION │          │
+│  │   (15%)     │    │   (10%)     │    │    (5%)     │          │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘          │
+│         │                  │                  │                  │
+│         └──────────────────┼──────────────────┘                  │
+│                            ▼                                     │
+│                 ┌─────────────────────┐                          │
+│                 │   EDGE CALCULATOR   │                          │
+│                 │                     │                          │
+│                 │ Weighted aggregation│                          │
+│                 │ Confidence scoring  │                          │
+│                 │ Recommendation      │                          │
+│                 └──────────┬──────────┘                          │
+│                            │                                     │
+│                            ▼                                     │
+│                 ┌─────────────────────┐                          │
+│                 │    EdgeResult       │                          │
+│                 │                     │                          │
+│                 │ edge_score: +0.23   │                          │
+│                 │ direction: OVER     │                          │
+│                 │ confidence: 83.6%   │                          │
+│                 │ rec: LEAN_OVER      │                          │
+│                 └─────────────────────┘                          │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3 Component Structure
+### 1.3 Folder Structure
 
 ```
-nba_engine/
+pro-basketball-pipeline/
 ├── docs/
-│   ├── DESIGN.md              # This document
-│   └── the_odds_api_docs.md   # Odds API reference
+│   ├── COMPREHENSIVE_SUMMARY.md   # Handoff document
+│   ├── DATA_INVENTORY.md          # All data sources
+│   ├── DESIGN.md                  # This document
+│   ├── LEARNINGS.md               # Insights & decisions
+│   └── the_odds_api_docs.md       # Odds API reference
 ├── exploration/
-│   └── explore_nba_api.py     # Data exploration script
+│   ├── explore_nba_api.py
+│   └── explore_advanced_data.py
 ├── src/
-│   ├── __init__.py
-│   ├── data_provider.py       # NBADataProvider (nba_api wrapper)
-│   ├── odds_client.py         # Odds API integration
-│   ├── signals/
-│   │   ├── __init__.py
-│   │   ├── base.py            # BaseSignal, SignalResult
-│   │   ├── line_value_signal.py
-│   │   ├── trend_signal.py
-│   │   ├── usage_signal.py
-│   │   ├── matchup_signal.py
-│   │   ├── environment_signal.py
-│   │   └── correlation_signal.py
-│   ├── edge_calculator.py     # Signal combination
-│   └── sgp_builder.py         # Parlay construction
+│   ├── __init__.py                # Public API
+│   ├── data_provider.py           # NBADataProvider
+│   ├── odds_client.py             # NBAOddsClient
+│   ├── injury_checker.py          # STUBBED
+│   ├── edge_calculator.py         # EdgeCalculator
+│   └── signals/
+│       ├── __init__.py
+│       ├── base.py                # BaseSignal, PropContext
+│       ├── line_value_signal.py   # 30%
+│       ├── trend_signal.py        # 20%
+│       ├── usage_signal.py        # 20%
+│       ├── matchup_signal.py      # 15%
+│       ├── environment_signal.py  # 10%
+│       └── correlation_signal.py  # 5%
 ├── scripts/
-│   ├── run_daily.py           # Daily SGP generation
-│   ├── backtest.py            # Historical validation
-│   └── settle.py              # Settlement
-└── migrations/
-    └── (uses existing nfl_sgp_* tables with league='NBA')
+│   └── demo_edge_analysis.py      # Working demo
+├── .env.example
+├── .gitignore
+└── requirements.txt
 ```
 
 ---
 
-## 4. Signal Framework (Adapted from NHL)
+## 2. Signal Framework
 
-### 4.1 Signal Weights (NBA-Tuned)
+### 2.1 Signal Weights
 
-| Signal | NHL Weight | NBA Weight | Rationale |
-|--------|------------|------------|-----------|
-| Line Value | 35% | **30%** | Season avg vs line, slightly less predictive in NBA |
-| Trend | 15% | **20%** | More games = more reliable trends |
-| Usage | 10% | **20%** | Minutes/usage rate highly predictive in NBA |
-| Matchup | 15% | **15%** | Opponent defensive rating |
-| Environment | 15% | **10%** | B2B matters but less than NHL |
-| Correlation | 10% | **5%** | Game totals less impactful (NBA is high-scoring) |
+| Signal | Weight | Primary Metric | Direction Logic |
+|--------|--------|----------------|-----------------|
+| Line Value | 30% | Season/L5 avg vs line | Expected > Line = OVER |
+| Trend | 20% | L5 vs season | Rising = OVER |
+| Usage | 20% | USG_PCT, minutes | High usage = OVER lean |
+| Matchup | 15% | Opponent DEF_RTG | Bad defense = OVER |
+| Environment | 10% | B2B, spread | B2B = UNDER |
+| Correlation | 5% | Game total | High total = OVER |
 
-### 4.2 Trend Signal
+### 2.2 Signal Implementation Details
 
-**Data Source**: `PlayerGameLog` (last 5 games vs season)
+#### Line Value Signal (30%)
 
-```python
-def calculate_trend(player_id: int, stat_type: str, line: float) -> SignalResult:
-    """
-    Compare player's last 5 games vs season average.
-
-    Example:
-    - LeBron L5 PTS: 23.0
-    - LeBron Season PTS: 24.4
-    - Trend: -5.8% (UNDER signal)
-    """
-    gamelog = PlayerGameLog(player_id=player_id, season='2024-25')
-    df = gamelog.get_data_frames()[0]
-
-    l5_avg = df.head(5)[stat_type].mean()
-    season_avg = df[stat_type].mean()
-
-    pct_diff = (l5_avg - season_avg) / season_avg
-
-    # Positive = OVER, Negative = UNDER
-    strength = max(-1.0, min(1.0, pct_diff * 2))  # Scale to -1 to 1
-
-    return SignalResult(
-        signal_type='trend',
-        strength=strength,
-        confidence=calculate_confidence(len(df), variance(df[stat_type])),
-        evidence=f"L5 avg {l5_avg:.1f} vs season {season_avg:.1f} ({pct_diff:+.1%})"
-    )
-```
-
-### 3.2 Usage Signal
-
-**Data Source**: `PlayerGameLog` (minutes, attempts trending)
+**Purpose**: Compare market line to statistical projection
 
 ```python
-def calculate_usage(player_id: int, stat_type: str) -> SignalResult:
-    """
-    Track opportunity metrics:
-    - Minutes trending up/down
-    - Shot attempts (FGA) for points
-    - Minutes * usage rate
-    """
-    # If minutes trending down, reduce confidence in OVER bets
-    # If minutes trending up, increase confidence in OVER bets
+# Blend season and recent
+expected = recent_avg * 0.6 + season_avg * 0.4
+
+# Calculate deviation
+deviation = (expected - line) / expected
+
+# Map to strength
+if deviation > 0:  # Expected > Line
+    strength = +deviation  # OVER signal
+else:
+    strength = deviation   # UNDER signal
 ```
 
-**Key Usage Metrics by Prop Type**:
+**Thresholds**:
+- MIN_DEVIATION: 5% (minimum to signal)
+- MAX_DEVIATION: 30% (cap for extreme cases)
 
-| Prop | Primary Usage Metric | Secondary |
-|------|----------------------|-----------|
-| Points | FGA, FTA, MIN | USG_PCT |
-| Rebounds | MIN, OREB+DREB | Team pace |
-| Assists | MIN, Touches | Team pace |
-| Threes | FG3A | MIN |
-| Blocks/Steals | MIN | Defensive rating |
+#### Trend Signal (20%)
 
-### 3.3 Matchup Signal
-
-**Data Source**: `LeagueDashPlayerStats` + opponent defensive ratings
+**Purpose**: Detect hot/cold streaks
 
 ```python
-def calculate_matchup(player_id: int, stat_type: str, opponent_team: str) -> SignalResult:
-    """
-    Compare opponent's defense vs league average.
+trend_pct = (l5_avg - season_avg) / season_avg
 
-    Example:
-    - OKC allows 108.5 PPG (2nd best in league)
-    - League average: 114.2 PPG
-    - Signal: UNDER (-5.0% vs league)
-    """
+# Rising trend = OVER signal
+# Falling trend = UNDER signal
+strength = trend_pct * scale_factor
 ```
 
-**Matchup Factors**:
+**Thresholds**:
+- MIN_TREND: 10% change to signal
+- MAX_TREND: 40% cap
 
-| Prop | Matchup Factor |
-|------|----------------|
-| Points | Opponent DRTG (defensive rating) |
-| Rebounds | Opponent REB rate, pace |
-| Assists | Opponent TOV rate (force turnovers = fewer assists) |
-| Threes | Opponent 3PT defense |
+**Minutes Factor**: If minutes trending same direction as stats, boost confidence.
 
-### 3.4 Environment Signal
+#### Usage Signal (20%)
 
-**Data Source**: `ScoreboardV2` + schedule analysis
+**Purpose**: Evaluate player's offensive role
 
+**Usage Tiers**:
+| Tier | USG_PCT | Interpretation |
+|------|---------|----------------|
+| Elite | 30%+ | Superstar, highly predictable |
+| High | 25-30% | Star player |
+| Average | 20-25% | Solid starter |
+| Low | <20% | Role player, volatile |
+
+**Minutes Tiers**:
+| Tier | Minutes | Interpretation |
+|------|---------|----------------|
+| High | 32+ | Full starter |
+| Starter | 28-32 | Regular starter |
+| Limited | <28 | Rotation player |
+
+#### Matchup Signal (15%)
+
+**Purpose**: Evaluate opponent defense quality
+
+**Defensive Rating Tiers** (2024-25):
+| Tier | DEF_RTG | Signal |
+|------|---------|--------|
+| Elite | <106 | Strong UNDER |
+| Good | 106-109 | Moderate UNDER |
+| Average | 109-116 | Neutral |
+| Bad | 116-119 | Moderate OVER |
+| Awful | 119+ | Strong OVER |
+
+**Stat-Specific Impact Multipliers**:
 ```python
-def calculate_environment(player_id: int, game_date: str) -> SignalResult:
-    """
-    Check situational factors:
-    - Back-to-back games (B2B) → reduced minutes/performance
-    - Home vs away
-    - Rest days (3+ days rest → bump?)
-    - Altitude (Denver)
-    """
+STAT_DEFENSE_IMPACT = {
+    'points': 1.0,      # Most affected
+    'threes': 0.9,
+    'assists': 0.7,
+    'rebounds': 0.5,
+    'steals': 0.4,
+    'blocks': 0.4,      # Least affected
+}
 ```
 
-**Environment Impact Matrix**:
+**Pace Factor**: Fast pace opponents (+3 pace vs avg) add +0.05 to OVER signal.
 
-| Factor | Impact | Direction |
-|--------|--------|-----------|
-| 2nd game of B2B | -5 to -10% | UNDER |
-| 3+ days rest | +2 to +5% | OVER |
-| Road game | -2 to -3% | UNDER |
-| Denver (altitude) | -3 to -5% | UNDER |
+#### Environment Signal (10%)
 
-### 3.5 Correlation Signal
+**Purpose**: Account for situational factors
 
-**Data Source**: Odds API (game total, spread)
-
+**B2B Impact**:
 ```python
-def calculate_correlation(stat_type: str, game_total: float, spread: float) -> SignalResult:
-    """
-    Higher game total → more possessions → more counting stats
-    Large spread → potential garbage time / blowout risk
-    """
+B2B_IMPACT = {
+    'points': -0.25,     # 25% UNDER lean
+    'threes': -0.20,
+    'assists': -0.15,
+    'rebounds': -0.15,
+    'turnovers': +0.10,  # More turnovers on B2B
+}
 ```
 
-**Correlation Matrix**:
+**3-in-4 Multiplier**: 1.5x B2B impact
 
-| Game Total | Impact on Props |
-|------------|-----------------|
-| > 230 | +5-8% scoring props |
-| < 210 | -5-8% scoring props |
-| 215-225 | Neutral |
+**Blowout Risk**:
+- Spread > 12: -10% signal (stars benched)
+- Spread > 8: -5% signal
 
-| Spread | Impact |
-|--------|--------|
-| > 10 pts | Garbage time risk, star benched early |
-| < 5 pts | Full minutes likely |
+**Home Advantage**: +5% signal
 
----
+#### Correlation Signal (5%)
 
-## 4. NBA-Specific Considerations
+**Purpose**: Align prop with game total expectations
 
-### 4.1 Sample Size (vs NFL)
+**Game Total Tiers**:
+| Total | Tier | Signal |
+|-------|------|--------|
+| 238+ | Very High | Strong OVER |
+| 230-238 | High | Moderate OVER |
+| 223-230 | Average | Neutral |
+| 215-223 | Low | Moderate UNDER |
+| <215 | Very Low | Strong UNDER |
 
-| Aspect | NFL | NBA |
-|--------|-----|-----|
-| Games per season | 17 | 82 |
-| Games for trend (L3/L5) | 18% of season | 6% of season |
-| Statistical stability | Lower | Higher |
-| Recommended lookback | 3 games | 5-10 games |
-
-**Implication**: NBA trends are more reliable due to larger sample size.
-
-### 4.2 Back-to-Back Games
-
-NBA has frequent B2Bs. This is a strong environmental signal:
-- Minutes typically reduced 2-5 minutes
-- Efficiency drops ~3-5%
-- **Strong UNDER signal for 2nd game of B2B**
-
-### 4.3 Load Management
-
-Star players may rest on B2Bs or for minor injuries. Check:
-- Injury reports (need separate data source)
-- Recent minutes patterns
-- Team's B2B policy
-
-### 4.4 Blowout Risk
-
-NBA has more blowouts than NFL. Large spreads (>10 pts) mean:
-- Star may be benched in 4th quarter
-- Props may not hit even if player is "on pace"
-- **Reduce confidence on OVER props when spread > 10**
-
----
-
-## 5. Implementation Phases
-
-### Phase 1: Data Provider (Week 1)
-- [ ] Create `NBADataProvider` class
-- [ ] Implement player lookup by name
-- [ ] Implement game log fetching with caching
-- [ ] Handle rate limiting (0.6s between calls)
-
-### Phase 2: Signal Implementations (Week 2)
-- [ ] Trend signal (L5 vs season)
-- [ ] Usage signal (minutes, attempts)
-- [ ] Matchup signal (opponent defense)
-- [ ] Environment signal (B2B detection)
-- [ ] Correlation signal (from Odds API)
-
-### Phase 3: SGP Engine (Week 3)
-- [ ] Edge aggregator for NBA
-- [ ] Parlay builder with correlation logic
-- [ ] Database loader (use existing schema with `league='NBA'`)
-
-### Phase 4: Integration (Week 4)
-- [ ] Add to scheduler
-- [ ] Unified landing page support
-- [ ] Testing with live games
-
----
-
-## 6. Database Schema
-
-Use existing `nfl_sgp_parlays` table with `league` field:
-
-```sql
--- Already added via migration
-ALTER TABLE nfl_sgp_parlays ADD COLUMN league VARCHAR(10) NOT NULL DEFAULT 'NFL';
-
--- Query NBA parlays
-SELECT * FROM nfl_sgp_parlays WHERE league = 'NBA' AND game_date = CURRENT_DATE;
-```
-
-**Note**: Consider renaming table to `sgp_parlays` (drop `nfl_` prefix) when multi-league is fully implemented.
-
----
-
-## 7. Rate Limiting
-
-nba_api has unofficial rate limits. Implement:
-
+**Stat Correlation Factors**:
 ```python
-import time
-
-class RateLimiter:
-    def __init__(self, min_interval: float = 0.6):
-        self.min_interval = min_interval
-        self.last_call = 0
-
-    def wait(self):
-        elapsed = time.time() - self.last_call
-        if elapsed < self.min_interval:
-            time.sleep(self.min_interval - elapsed)
-        self.last_call = time.time()
-```
-
----
-
-## 8. Caching Strategy
-
-NBA data changes less frequently than NFL. Implement:
-
-```python
-CACHE_TTL = {
-    'player_gamelog': 3600,      # 1 hour (updates post-game)
-    'league_stats': 3600,        # 1 hour
-    'team_defense': 86400,       # 24 hours
-    'schedule': 3600,            # 1 hour
+STAT_TOTAL_CORRELATION = {
+    'points': 0.9,
+    'threes': 0.8,
+    'assists': 0.7,
+    'rebounds': 0.5,
+    'turnovers': 0.4,
+    'blocks': 0.3,
 }
 ```
 
 ---
 
-*Document Version: 1.0*
+## 3. Edge Calculator
+
+### 3.1 Aggregation Formula
+
+```python
+edge_score = sum(signal.strength * signal.weight for all signals)
+confidence = sum(signal.confidence * signal.weight for all signals)
+direction = 'over' if edge_score > 0 else 'under'
+```
+
+### 3.2 Recommendation Thresholds
+
+| Recommendation | Edge Threshold | Confidence Threshold |
+|----------------|---------------|---------------------|
+| `strong_over/under` | >= 0.25 | >= 55% |
+| `lean_over/under` | >= 0.15 | >= 50% |
+| `slight_over/under` | >= 0.08 | >= 40% (high-value only) |
+| `pass` | < 0.08 | < 40% |
+
+### 3.3 Expected Value Calculation
+
+```python
+# Implied probability from odds
+if odds >= 0:
+    implied_prob = 100 / (odds + 100)
+else:
+    implied_prob = abs(odds) / (abs(odds) + 100)
+
+# Adjusted probability
+est_prob = implied_prob + (edge_magnitude * confidence * 0.1)
+
+# EV calculation
+ev = (est_prob * (decimal_odds - 1)) - (1 - est_prob)
+```
+
+---
+
+## 4. Data Provider
+
+### 4.1 nba_api Endpoints Used
+
+| Endpoint | Purpose | Cache TTL |
+|----------|---------|-----------|
+| `PlayerGameLog` | Player stats, trends | 1 hour |
+| `LeagueDashPlayerStats` | Usage rates, rankings | 1 hour |
+| `LeagueDashTeamStats` | DEF_RTG, PACE | 24 hours |
+| `TeamGameLog` | B2B detection | 1 hour |
+| `ScoreboardV2` | Today's games | 1 hour |
+
+### 4.2 High-Value Filter
+
+```python
+# Players meeting all criteria:
+MIN >= 25          # Starter minutes
+GP >= 15           # Sample size
+USG_PCT >= 0.18    # Meaningful role
+```
+
+**Result**: ~118 players qualify (Dec 2025)
+
+### 4.3 Rate Limiting
+
+```python
+MIN_INTERVAL = 0.6  # seconds between calls
+```
+
+---
+
+## 5. Odds Client
+
+### 5.1 Supported Markets
+
+**Player Props**:
+- `player_points`, `player_rebounds`, `player_assists`
+- `player_threes`, `player_blocks`, `player_steals`
+- `player_turnovers`, `player_field_goals`, `player_frees_made`
+
+**Combo Props**:
+- `player_points_rebounds_assists` (PRA)
+- `player_points_rebounds`, `player_points_assists`
+- `player_rebounds_assists`, `player_blocks_steals`
+
+**Game Lines**:
+- `h2h` (moneyline)
+- `spreads` (point spread)
+- `totals` (over/under)
+
+### 5.2 Response Caching
+
+```python
+CACHE_DIR = "data/odds_cache/"
+CACHE_TTL = 1 hour
+```
+
+---
+
+## 6. Future Work
+
+### 6.1 Critical (Production Blockers)
+
+1. **Injury Checker Integration**
+   - Source: ESPN API or Rotowire
+   - Impact: Skip injured players, reduce confidence for questionable
+
+2. **Orchestration Script**
+   - Fetch today's props
+   - Build PropContext for each
+   - Run edge calculator
+   - Store to Supabase
+
+3. **Database Schema**
+   ```sql
+   -- Use existing nfl_sgp_parlays with league='NBA'
+   SELECT * FROM nfl_sgp_parlays WHERE league = 'NBA';
+   ```
+
+### 6.2 Important (Phase 2)
+
+1. **Parlay Builder**
+   - Combine 3-5 props into SGP
+   - Check correlations
+   - Diversify across teams
+
+2. **Scheduler**
+   - Railway cron for daily runs
+   - Run before first tip (e.g., 5pm ET)
+
+3. **Settlement**
+   - Compare predictions to results
+   - Track hit rate
+
+### 6.3 Nice-to-Have (Phase 3)
+
+1. **LLM Thesis Generation**
+   - Natural language explanations
+   - Game script narratives
+
+2. **Backtesting Framework**
+   - Historical validation
+   - Signal tuning
+
+---
+
+## Appendix A: Demo Output
+
+```
+============================================================
+NBA SGP Edge Analysis Demo
+============================================================
+
+Analyzing: LeBron James points O/U 24.5
+Season avg: 23.8, Recent avg: 27.2
+Opponent: DET (DEF_RTG: 118.5)
+------------------------------------------------------------
+
+EDGE SCORE: +0.2334
+DIRECTION: OVER
+CONFIDENCE: 83.60%
+RECOMMENDATION: LEAN_OVER
+EXPECTED VALUE: +0.0365
+
+------------------------------------------------------------
+SIGNAL BREAKDOWN:
+------------------------------------------------------------
+
+LINE_VALUE (90% conf)
+  Strength: +0.0074 ↑
+  Evidence: Line 24.5 vs expected 25.8 (5.2% deviation → OVER)
+
+TREND (85% conf)
+  Strength: +0.1571 ↑
+  Evidence: Trending UP: L5 avg 27.2 vs season 23.8 (+14.3%)
+
+USAGE (100% conf)
+  Strength: +0.5000 ↑
+  Evidence: Elite usage (31.5%), high minutes (35.2) → Favorable OVER
+
+MATCHUP (90% conf)
+  Strength: +0.5700 ↑
+  Evidence: vs DET (weak defense, 118.5 DEF_RTG) → OVER [fast pace]
+
+ENVIRONMENT (30% conf)
+  Strength: +0.0000 →
+  Evidence: Home court (+5%) | Blowout risk (reduced minutes)
+
+CORRELATION (62% conf)
+  Strength: +0.2850 ↑
+  Evidence: Game total 232.5 (high) → OVER for points
+
+============================================================
+Analysis complete!
+```
+
+---
+
+## Appendix B: Running the Demo
+
+```bash
+cd pro-basketball-pipeline
+python scripts/demo_edge_analysis.py
+```
+
+---
+
+*Document Version: 2.0*
 *Last Updated: December 2025*
