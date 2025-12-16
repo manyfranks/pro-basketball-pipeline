@@ -1,0 +1,17 @@
+# NBA SGP Engine Dependencies
+
+# Data providers
+nba_api>=1.10.0
+requests>=2.28.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Database
+supabase>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Utilities
