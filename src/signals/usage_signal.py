@@ -1,8 +1,11 @@
 """
-Usage Signal (Weight: 20%)
+Usage Signal (Weight: 10%)
 
 Analyzes player's usage rate and role in offense.
 High usage + good opportunity = potential edge.
+
+OPTIMIZED: Reduced from 20% to 10% based on backtest analysis.
+Usage signal showed only 56% hit rate - underperforming.
 """
 
 from .base import BaseSignal, SignalResult, PropContext
@@ -17,11 +20,11 @@ class UsageSignal(BaseSignal):
     - High usage players are more predictable
     - Minutes matter - more time = more opportunity
 
-    Key insight: High usage players with consistent minutes
-    are the most predictable for props.
+    Note: Backtest showed this signal underperformed (56% hit rate).
+    Consider as supporting signal rather than primary driver.
     """
 
-    weight = 0.20
+    weight = 0.10  # Reduced from 0.20 - underperforming signal
     name = "usage"
 
     # Usage thresholds (league avg ~20%)

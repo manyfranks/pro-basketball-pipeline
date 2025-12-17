@@ -112,7 +112,7 @@ class NBADataProvider:
     - High-value target filtering
     """
 
-    SEASON = '2024-25'
+    SEASON = '2025-26'
 
     # Cache TTLs (seconds)
     CACHE_TTL = {
@@ -138,14 +138,95 @@ class NBADataProvider:
     def _init_static_data(self):
         """Initialize static player and team lookups."""
         for player in players.get_active_players():
-            self._players_by_name[player['full_name'].lower()] = player
+            name = player['full_name'].lower()
+            self._players_by_name[name] = player
             self._players_by_id[player['id']] = player
+
+            # Also index normalized names (diacritics removed, suffixes stripped)
+            normalized = self._normalize_name(name)
+            if normalized != name and normalized not in self._players_by_name:
+                self._players_by_name[normalized] = player
+
+            # Index diacritic-stripped version specifically
+            stripped = self._strip_diacritics(name)
+            if stripped != name and stripped not in self._players_by_name:
+                self._players_by_name[stripped] = player
+
+        # Add alias lookups
+        for alias, canonical in self.NAME_ALIASES.items():
+            if canonical in self._players_by_name and alias not in self._players_by_name:
+                self._players_by_name[alias] = self._players_by_name[canonical]
 
         for team in teams.get_teams():
             self._teams_by_abbrev[team['abbreviation']] = team
             self._teams_by_id[team['id']] = team
 
         logger.info(f"Loaded {len(self._players_by_name)} players, {len(self._teams_by_abbrev)} teams")
+
+    # Mapping of common nicknames/variations to canonical names
+    NAME_ALIASES = {
+        # Nickname → Formal name
+        'herb jones': 'herbert jones',
+        'nic claxton': 'nicolas claxton',
+        'nicolas claxton': 'nic claxton',  # Reverse lookup
+        'aj green': 'a.j. green',
+        'a.j. green': 'aj green',  # Reverse
+        'pj washington': 'p.j. washington',
+        'p.j. washington': 'pj washington',
+        'cj mccollum': 'c.j. mccollum',
+        'c.j. mccollum': 'cj mccollum',
+        'og anunoby': 'o.g. anunoby',
+        'rj barrett': 'r.j. barrett',
+        'tj mcconnell': 't.j. mcconnell',
+        'tj warren': 't.j. warren',
+        'cam thomas': 'cameron thomas',
+        'ky bowman': 'kyrie bowman',
+    }
+
+    def _strip_diacritics(self, text: str) -> str:
+        """
+        Remove diacritical marks from text.
+
+        Examples:
+            Dončić → Doncic
+            Schröder → Schroder
+            Jović → Jovic
+        """
+        import unicodedata
+        # NFD decomposition separates base chars from diacritics
+        nfkd = unicodedata.normalize('NFKD', text)
+        # Filter out combining characters (diacritics)
+        return ''.join(c for c in nfkd if not unicodedata.combining(c))
+
+    def _normalize_name(self, name: str) -> str:
+        """
+        Normalize player name for matching.
+
+        Handles:
+        - Case normalization
+        - Diacritic removal (Dončić → Doncic)
+        - Suffix removal (Jr., III, etc.)
+        - Punctuation removal (A.J. → AJ)
+        """
+        # Lowercase
+        normalized = name.lower()
+
+        # Strip diacritics (Dončić → Doncic)
+        normalized = self._strip_diacritics(normalized)
+
+        # Remove periods from initials (A.J. → AJ)
+        normalized = normalized.replace('.', '')
+
+        # Remove common suffixes
+        suffixes = [' jr', ' iii', ' ii', ' iv', ' sr']
+        for suffix in suffixes:
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)]
+
+        # Clean up extra whitespace
+        normalized = ' '.join(normalized.split())
+
+        return normalized.strip()
 
     def _get_cached(self, key: str, ttl_type: str) -> Optional[Any]:
         """Get cached value if not expired."""
@@ -165,8 +246,65 @@ class NBADataProvider:
     # =========================================================================
 
     def find_player(self, name: str) -> Optional[Dict]:
-        """Find player by name (case-insensitive)."""
-        return self._players_by_name.get(name.lower())
+        """
+        Find player by name with multiple matching strategies.
+
+        Strategies (in order):
+        1. Exact match (case-insensitive)
+        2. Diacritic-stripped match (Dončić → Doncic)
+        3. Normalized match (suffixes removed, periods removed)
+        4. Alias lookup (Herb → Herbert)
+        5. Last name + first initial fuzzy match
+        """
+        name_lower = name.lower()
+
+        # 1. Exact match
+        if name_lower in self._players_by_name:
+            return self._players_by_name[name_lower]
+
+        # 2. Diacritic-stripped match
+        stripped = self._strip_diacritics(name_lower)
+        if stripped in self._players_by_name:
+            return self._players_by_name[stripped]
+
+        # 3. Normalized match (suffixes, periods)
+        normalized = self._normalize_name(name_lower)
+        if normalized in self._players_by_name:
+            return self._players_by_name[normalized]
+
+        # 4. Check aliases
+        if name_lower in self.NAME_ALIASES:
+            alias_target = self.NAME_ALIASES[name_lower]
+            if alias_target in self._players_by_name:
+                return self._players_by_name[alias_target]
+
+        # Also check normalized version against aliases
+        if normalized in self.NAME_ALIASES:
+            alias_target = self.NAME_ALIASES[normalized]
+            if alias_target in self._players_by_name:
+                return self._players_by_name[alias_target]
+
+        # 5. Last name + first initial fuzzy match
+        parts = normalized.split()
+        if len(parts) >= 2:
+            last_name = parts[-1]
+            first_initial = parts[0][0] if parts[0] else ''
+
+            candidates = []
+            for pname, pdata in self._players_by_name.items():
+                pname_normalized = self._normalize_name(pname)
+                pname_parts = pname_normalized.split()
+                if len(pname_parts) >= 2:
+                    if pname_parts[-1] == last_name and pname_parts[0].startswith(first_initial):
+                        candidates.append(pdata)
+
+            # If exactly one match, return it
+            if len(candidates) == 1:
+                return candidates[0]
+
+        # Log miss for debugging
+        logger.warning(f"Player not found: {name}")
+        return None
 
     def get_player_by_id(self, player_id: int) -> Optional[Dict]:
         """Get player by ID."""

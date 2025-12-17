@@ -1,8 +1,11 @@
 """
-Correlation Signal (Weight: 5%)
+Correlation Signal (Weight: 20%)
 
 Analyzes correlation between player props and game totals.
 High-scoring games = more individual stats.
+
+OPTIMIZED: Increased from 5% to 20% based on backtest analysis.
+Correlation signal showed 75% hit rate - highest among all signals.
 """
 
 from .base import BaseSignal, SignalResult, PropContext
@@ -17,11 +20,10 @@ class CorrelationSignal(BaseSignal):
     - Low totals (210-) suggest slow, defensive games
     - Individual stats correlate with game pace/scoring
 
-    This is a supporting signal that amplifies other signals
-    when game conditions align.
+    This signal proved to be the most predictive in backtest (75% hit rate).
     """
 
-    weight = 0.05
+    weight = 0.20  # Increased from 0.05 - highest predictive signal
     name = "correlation"
 
     # Game total thresholds (NBA typically 215-235)

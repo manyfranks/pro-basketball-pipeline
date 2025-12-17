@@ -14,4 +14,13 @@ supabase>=2.0.0
 # Environment
 python-dotenv>=1.0.0
 
-# Utilities
+# API (optional - for serving endpoints)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+
+# Scheduling (optional - for local cron)
+# apscheduler>=3.10.0
+
+# Monitoring (optional)
+# sentry-sdk>=1.35.0

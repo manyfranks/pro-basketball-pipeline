@@ -434,6 +434,107 @@ class NBAOddsClient:
     # CONVENIENCE METHODS
     # =========================================================================
 
+    # Team name to abbreviation mapping
+    TEAM_ABBREV = {
+        'Atlanta Hawks': 'ATL',
+        'Boston Celtics': 'BOS',
+        'Brooklyn Nets': 'BKN',
+        'Charlotte Hornets': 'CHA',
+        'Chicago Bulls': 'CHI',
+        'Cleveland Cavaliers': 'CLE',
+        'Dallas Mavericks': 'DAL',
+        'Denver Nuggets': 'DEN',
+        'Detroit Pistons': 'DET',
+        'Golden State Warriors': 'GSW',
+        'Houston Rockets': 'HOU',
+        'Indiana Pacers': 'IND',
+        'Los Angeles Clippers': 'LAC',
+        'Los Angeles Lakers': 'LAL',
+        'Memphis Grizzlies': 'MEM',
+        'Miami Heat': 'MIA',
+        'Milwaukee Bucks': 'MIL',
+        'Minnesota Timberwolves': 'MIN',
+        'New Orleans Pelicans': 'NOP',
+        'New York Knicks': 'NYK',
+        'Oklahoma City Thunder': 'OKC',
+        'Orlando Magic': 'ORL',
+        'Philadelphia 76ers': 'PHI',
+        'Phoenix Suns': 'PHX',
+        'Portland Trail Blazers': 'POR',
+        'Sacramento Kings': 'SAC',
+        'San Antonio Spurs': 'SAS',
+        'Toronto Raptors': 'TOR',
+        'Utah Jazz': 'UTA',
+        'Washington Wizards': 'WAS',
+    }
+
+    def _get_team_abbrev(self, team_name: str) -> str:
+        """Convert full team name to abbreviation."""
+        return self.TEAM_ABBREV.get(team_name, team_name[:3].upper())
+
+    def get_todays_games(self) -> List[Dict]:
+        """
+        Get today's NBA games with odds data.
+
+        Returns:
+            List of game dicts with:
+            - id: Event ID
+            - home_team: Home team abbreviation (e.g., 'NYK')
+            - away_team: Away team abbreviation (e.g., 'SAS')
+            - home_team_full: Full team name
+            - away_team_full: Full team name
+            - commence_time: Game start time (ISO format)
+            - game_line: GameLine object (spread, total, moneylines)
+        """
+        from zoneinfo import ZoneInfo
+        ET = ZoneInfo('America/New_York')
+
+        events = self.get_events()
+
+        # Filter to today's events (in ET)
+        today = datetime.now(ET).date()
+        todays_events = []
+
+        for e in events:
+            try:
+                commence = datetime.fromisoformat(e['commence_time'].replace('Z', '+00:00'))
+                if commence.astimezone(ET).date() == today:
+                    todays_events.append(e)
+            except Exception:
+                continue
+
+        logger.info(f"Found {len(todays_events)} games for today ({today})")
+
+        # Enrich with game lines
+        games = []
+        for event in todays_events:
+            event_id = event['id']
+            home_full = event.get('home_team', '')
+            away_full = event.get('away_team', '')
+
+            # Fetch game odds
+            odds_data = self.get_game_odds(event_id)
+            game_line = self.parse_game_line(odds_data) if odds_data else None
+
+            game = {
+                'id': event_id,
+                'home_team': self._get_team_abbrev(home_full),
+                'away_team': self._get_team_abbrev(away_full),
+                'home_team_full': home_full,
+                'away_team_full': away_full,
+                'commence_time': event.get('commence_time', ''),
+                'game_line': game_line,
+            }
+
+            # Add spread/total for convenience
+            if game_line:
+                game['spread'] = game_line.spread
+                game['total'] = game_line.total
+
+            games.append(game)
+
+        return games
+
     def get_todays_props(self, stat_types: List[str] = None) -> Dict[str, List[PropLine]]:
         """
         Get all player props for today's games.

@@ -1,8 +1,11 @@
 """
-Environment Signal (Weight: 10%)
+Environment Signal (Weight: 5%)
 
 Analyzes situational factors: B2B, home/away, rest days, travel.
 Context that affects performance beyond matchup.
+
+OPTIMIZED: Reduced from 10% to 5% based on backtest analysis.
+Environment signal showed only 54% hit rate - weakest signal.
 """
 
 from .base import BaseSignal, SignalResult, PropContext
@@ -18,14 +21,11 @@ class EnvironmentSignal(BaseSignal):
     - Home court advantage exists but modest
     - Schedule spots matter (trap games, etc.)
 
-    B2B Impact (research-backed):
-    - Points: -2 to -4 points on average
-    - Rebounds: -0.5 to -1
-    - Assists: -0.5 to -1
-    - Most stars rest or have reduced minutes
+    Note: Backtest showed this signal weakest (54% hit rate).
+    B2B impact less predictive than expected in practice.
     """
 
-    weight = 0.10
+    weight = 0.05  # Reduced from 0.10 - weakest signal
     name = "environment"
 
     # B2B impact factors by stat type (negative = reduces stat)

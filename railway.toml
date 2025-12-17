@@ -1,0 +1,54 @@
+# NBA SGP Engine - Railway Configuration
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+numReplicas = 1
+healthcheckPath = "/"
+healthcheckTimeout = 10
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Environment variables (set in Railway dashboard, not here)
+# ODDS_API_KEY=xxx
+# SUPABASE_URL=xxx
+# SUPABASE_KEY=xxx
+
+# =============================================================================
+# CRON JOBS (per ORCHESTRATION_DESIGN.md)
+# =============================================================================
+# Railway cron runs in UTC. NBA operates on ET.
+# During EST (Nov-Mar): ET = UTC - 5 hours
+# During EDT (Mar-Nov): ET = UTC - 4 hours
+#
+# Create these as separate services in Railway dashboard:
+
+# Service 1: nba-sgp-morning
+# Cron: 0 15 * * *  (15:00 UTC = 10:00 AM ET during EST)
+# Command: python -m scripts.nba_daily_orchestrator
+# Purpose: Settlement of yesterday's parlays + Early SGP generation
+
+# Service 2: nba-sgp-afternoon
+# Cron: 0 19 * * *  (19:00 UTC = 2:00 PM ET during EST)
+# Command: python -m scripts.nba_daily_orchestrator --generate-only --force-refresh
+# Purpose: Final SGP after injury report cutoff (5 PM ET)
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# NBA Game Windows (Eastern Time):
+# - Afternoon: 12:00-3:00 PM (weekends, holidays)
+# - Evening: 7:00-8:00 PM (most common)
+# - Late: 10:00-10:30 PM (West Coast)
+#
+# Recommended Cron Schedule:
+# 1. 2:00 PM ET  - Early props fetch (catch afternoon games)
+# 2. 6:00 PM ET  - Main props fetch (evening games, injury updates)
+# 3. 10:00 AM ET - Settle previous day's parlays
+#
+# For API service (if needed):
+# [deploy]
+# startCommand = "uvicorn api:app --host 0.0.0.0 --port $PORT"
