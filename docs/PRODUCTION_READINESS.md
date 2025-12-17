@@ -128,24 +128,23 @@ ODDS_API_KEY=xxx
 OPENROUTER_API_KEY=xxx (optional)
 ```
 
-### 4. Create Cron Services
-Create 3 separate services with these commands:
+### 4. Configure Cron Service
+In Railway Dashboard, create **ONE cron service** (matches NHL pipeline pattern):
 
-**Service 1: nba-sgp-props**
-- Schedule: `0 23 * * *` (6PM ET = 23:00 UTC)
-- Command: `python -m scripts.nba_daily_orchestrator --generate-only`
+**Service: nba-sgp-daily**
+- Schedule: `0 15 * * *` (15:00 UTC = 10:00 AM ET)
+- Command: `python -m scripts.nba_daily_orchestrator`
 
-**Service 2: nba-sgp-settlement**
-- Schedule: `0 15 * * *` (10AM ET = 15:00 UTC)
-- Command: `python -m scripts.nba_daily_orchestrator --settle-only`
+This single run handles both:
+1. Settlement of yesterday's parlays
+2. SGP generation for today's games
 
-**Service 3: nba-sgp-refresh**
-- Schedule: `0 19 * * *` (2PM ET = 19:00 UTC)
-- Command: `python -m scripts.nba_daily_orchestrator --generate-only --force-refresh`
+> **Note**: Railway supports one cron job per service. The orchestrator runs the full pipeline (settlement → generation) in a single execution, matching the NHL pipeline architecture.
 
 ### 5. Deploy
+Push to GitHub and Railway will auto-deploy:
 ```bash
-railway up
+git push origin main
 ```
 
 ---

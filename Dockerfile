@@ -24,10 +24,9 @@ COPY .env.example ./.env.example
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "from src.db_manager import get_db_manager; get_db_manager().test_connection()" || exit 1
+# NOTE: No HEALTHCHECK - this is a cron job, not a long-running service
+# Railway cron services don't need healthchecks
 
 # Default command - run the daily orchestrator
-# Use --generate-only or --settle-only via Railway service config
+# Handles both settlement and SGP generation
 CMD ["python", "-m", "scripts.nba_daily_orchestrator"]

@@ -7,48 +7,34 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 numReplicas = 1
-healthcheckPath = "/"
-healthcheckTimeout = 10
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Environment variables (set in Railway dashboard, not here)
-# ODDS_API_KEY=xxx
-# SUPABASE_URL=xxx
-# SUPABASE_KEY=xxx
+# NOTE: No healthcheck - this is a cron job, not a web server
+# NOTE: No cron in railway.toml - Railway requires cron config via dashboard
 
 # =============================================================================
-# CRON JOBS (per ORCHESTRATION_DESIGN.md)
+# RAILWAY DASHBOARD CONFIGURATION
 # =============================================================================
-# Railway cron runs in UTC. NBA operates on ET.
-# During EST (Nov-Mar): ET = UTC - 5 hours
-# During EDT (Mar-Nov): ET = UTC - 4 hours
+# Configure ONE cron service in Railway dashboard:
 #
-# Create these as separate services in Railway dashboard:
-
-# Service 1: nba-sgp-morning
+# Service: nba-sgp-daily
 # Cron: 0 15 * * *  (15:00 UTC = 10:00 AM ET during EST)
 # Command: python -m scripts.nba_daily_orchestrator
-# Purpose: Settlement of yesterday's parlays + Early SGP generation
-
-# Service 2: nba-sgp-afternoon
-# Cron: 0 19 * * *  (19:00 UTC = 2:00 PM ET during EST)
-# Command: python -m scripts.nba_daily_orchestrator --generate-only --force-refresh
-# Purpose: Final SGP after injury report cutoff (5 PM ET)
+#
+# This single run handles both:
+# 1. Settlement of yesterday's parlays
+# 2. SGP generation for today's games
+#
+# (Matches NHL pipeline pattern - one orchestrator, one cron)
 
 # =============================================================================
-# NOTES
+# ENVIRONMENT VARIABLES (set in Railway dashboard)
 # =============================================================================
-# NBA Game Windows (Eastern Time):
-# - Afternoon: 12:00-3:00 PM (weekends, holidays)
-# - Evening: 7:00-8:00 PM (most common)
-# - Late: 10:00-10:30 PM (West Coast)
+# Required:
+#   SUPABASE_URL=https://xxx.supabase.co
+#   SUPABASE_KEY=eyJhbG...
+#   ODDS_API_KEY=xxx
 #
-# Recommended Cron Schedule:
-# 1. 2:00 PM ET  - Early props fetch (catch afternoon games)
-# 2. 6:00 PM ET  - Main props fetch (evening games, injury updates)
-# 3. 10:00 AM ET - Settle previous day's parlays
-#
-# For API service (if needed):
-# [deploy]
-# startCommand = "uvicorn api:app --host 0.0.0.0 --port $PORT"
+# Optional:
+#   OPENROUTER_API_KEY=xxx (for LLM thesis generation)
