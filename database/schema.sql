@@ -151,24 +151,170 @@ CREATE INDEX IF NOT EXISTS idx_nba_sgp_settlements_result ON nba_sgp_settlements
 -- ============================================================================
 
 -- View: Daily SGP Summary
+-- Uses CTEs to avoid cartesian product between legs and settlements
 CREATE OR REPLACE VIEW v_nba_sgp_daily_summary AS
+WITH leg_stats AS (
+    -- Aggregate leg-level stats per parlay
+    SELECT
+        l.parlay_id,
+        COUNT(*) as total_legs,
+        SUM(CASE WHEN l.result = 'WIN' THEN 1 ELSE 0 END) as legs_won,
+        SUM(CASE WHEN l.result IN ('WIN', 'LOSS') THEN 1 ELSE 0 END) as legs_settled
+    FROM nba_sgp_legs l
+    GROUP BY l.parlay_id
+),
+parlay_data AS (
+    -- Join parlays with pre-aggregated leg stats and settlements
+    SELECT
+        p.game_date,
+        p.season,
+        p.season_type,
+        p.parlay_type,
+        p.id as parlay_id,
+        COALESCE(ls.total_legs, 0) as total_legs,
+        COALESCE(ls.legs_won, 0) as legs_won,
+        COALESCE(ls.legs_settled, 0) as legs_settled,
+        s.result as parlay_result,
+        s.profit
+    FROM nba_sgp_parlays p
+    LEFT JOIN leg_stats ls ON p.id = ls.parlay_id
+    LEFT JOIN nba_sgp_settlements s ON p.id = s.parlay_id
+)
 SELECT
-    p.game_date,
-    p.season,
-    p.season_type,
-    p.parlay_type,
-    COUNT(DISTINCT p.id) as parlays_generated,
-    COUNT(DISTINCT s.id) as parlays_settled,
-    SUM(CASE WHEN s.result = 'WIN' THEN 1 ELSE 0 END) as parlays_won,
-    SUM(s.legs_hit) as total_legs_hit,
-    SUM(s.total_legs) as total_legs,
-    ROUND(100.0 * SUM(CASE WHEN s.result = 'WIN' THEN 1 ELSE 0 END)
-          / NULLIF(COUNT(DISTINCT s.id), 0), 1) as parlay_win_rate,
-    ROUND(100.0 * SUM(s.legs_hit) / NULLIF(SUM(s.total_legs), 0), 1) as leg_hit_rate
-FROM nba_sgp_parlays p
-LEFT JOIN nba_sgp_settlements s ON p.id = s.parlay_id
-GROUP BY p.game_date, p.season, p.season_type, p.parlay_type
-ORDER BY p.game_date DESC, p.parlay_type;
+    game_date,
+    season,
+    season_type,
+    parlay_type,
+    COUNT(*) as total_parlays,
+    SUM(total_legs) as total_legs,
+    SUM(legs_won) as legs_hit,
+    SUM(legs_settled) as legs_settled,
+    COUNT(CASE WHEN parlay_result IS NOT NULL THEN 1 END) as parlays_settled,
+    SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END) as parlays_won,
+    COALESCE(SUM(profit), 0) as total_profit,
+    ROUND(100.0 * SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END)
+          / NULLIF(COUNT(CASE WHEN parlay_result IS NOT NULL THEN 1 END), 0), 1) as parlay_win_rate,
+    ROUND(100.0 * SUM(legs_won) / NULLIF(SUM(legs_settled), 0), 1) as leg_hit_rate
+FROM parlay_data
+GROUP BY game_date, season, season_type, parlay_type
+ORDER BY game_date DESC, parlay_type;
+
+
+-- View: Rolling Performance (7-day and 30-day windows)
+CREATE OR REPLACE VIEW v_nba_sgp_rolling_performance AS
+WITH leg_stats AS (
+    SELECT
+        l.parlay_id,
+        COUNT(*) as total_legs,
+        SUM(CASE WHEN l.result = 'WIN' THEN 1 ELSE 0 END) as legs_won,
+        SUM(CASE WHEN l.result IN ('WIN', 'LOSS') THEN 1 ELSE 0 END) as legs_settled
+    FROM nba_sgp_legs l
+    GROUP BY l.parlay_id
+),
+parlay_data AS (
+    SELECT
+        p.id as parlay_id,
+        p.game_date,
+        p.parlay_type,
+        COALESCE(ls.total_legs, 0) as total_legs,
+        COALESCE(ls.legs_won, 0) as legs_won,
+        COALESCE(ls.legs_settled, 0) as legs_settled,
+        s.result as parlay_result
+    FROM nba_sgp_parlays p
+    LEFT JOIN leg_stats ls ON p.id = ls.parlay_id
+    LEFT JOIN nba_sgp_settlements s ON p.id = s.parlay_id
+    WHERE p.game_date >= CURRENT_DATE - INTERVAL '30 days'
+)
+SELECT
+    parlay_type,
+    -- 7-day metrics
+    COUNT(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as parlays_7d,
+    SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' THEN total_legs ELSE 0 END) as legs_7d,
+    SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' THEN legs_won ELSE 0 END) as legs_hit_7d,
+    SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' AND parlay_result = 'WIN' THEN 1 ELSE 0 END) as parlays_won_7d,
+    ROUND(100.0 * SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' AND parlay_result = 'WIN' THEN 1 ELSE 0 END)
+          / NULLIF(COUNT(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' AND parlay_result IS NOT NULL THEN 1 END), 0), 1) as parlay_win_rate_7d,
+    ROUND(100.0 * SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' THEN legs_won ELSE 0 END)
+          / NULLIF(SUM(CASE WHEN game_date >= CURRENT_DATE - INTERVAL '7 days' THEN legs_settled ELSE 0 END), 0), 1) as leg_hit_rate_7d,
+    -- 30-day metrics
+    COUNT(*) as parlays_30d,
+    SUM(total_legs) as legs_30d,
+    SUM(legs_won) as legs_hit_30d,
+    SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END) as parlays_won_30d,
+    ROUND(100.0 * SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END)
+          / NULLIF(COUNT(CASE WHEN parlay_result IS NOT NULL THEN 1 END), 0), 1) as parlay_win_rate_30d,
+    ROUND(100.0 * SUM(legs_won) / NULLIF(SUM(legs_settled), 0), 1) as leg_hit_rate_30d
+FROM parlay_data
+GROUP BY parlay_type
+ORDER BY parlay_type;
+
+
+-- View: Season Summary (all-time by season)
+CREATE OR REPLACE VIEW v_nba_sgp_season_summary AS
+WITH leg_stats AS (
+    SELECT
+        l.parlay_id,
+        COUNT(*) as total_legs,
+        SUM(CASE WHEN l.result = 'WIN' THEN 1 ELSE 0 END) as legs_won,
+        SUM(CASE WHEN l.result IN ('WIN', 'LOSS') THEN 1 ELSE 0 END) as legs_settled
+    FROM nba_sgp_legs l
+    GROUP BY l.parlay_id
+),
+parlay_data AS (
+    SELECT
+        p.season,
+        p.season_type,
+        p.game_date,
+        p.id as parlay_id,
+        COALESCE(ls.total_legs, 0) as total_legs,
+        COALESCE(ls.legs_won, 0) as legs_won,
+        COALESCE(ls.legs_settled, 0) as legs_settled,
+        s.result as parlay_result,
+        s.profit
+    FROM nba_sgp_parlays p
+    LEFT JOIN leg_stats ls ON p.id = ls.parlay_id
+    LEFT JOIN nba_sgp_settlements s ON p.id = s.parlay_id
+)
+SELECT
+    season,
+    season_type,
+    COUNT(*) as total_parlays,
+    SUM(total_legs) as total_legs,
+    SUM(legs_won) as total_legs_hit,
+    SUM(legs_settled) as total_legs_settled,
+    COUNT(CASE WHEN parlay_result IS NOT NULL THEN 1 END) as parlays_settled,
+    SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END) as parlays_won,
+    SUM(CASE WHEN parlay_result = 'LOSS' THEN 1 ELSE 0 END) as parlays_lost,
+    COALESCE(SUM(profit), 0) as total_profit,
+    ROUND(100.0 * SUM(CASE WHEN parlay_result = 'WIN' THEN 1 ELSE 0 END)
+          / NULLIF(COUNT(CASE WHEN parlay_result IS NOT NULL THEN 1 END), 0), 1) as parlay_win_rate,
+    ROUND(100.0 * SUM(legs_won) / NULLIF(SUM(legs_settled), 0), 1) as leg_hit_rate,
+    MIN(game_date) as first_game,
+    MAX(game_date) as last_game
+FROM parlay_data
+GROUP BY season, season_type
+ORDER BY season DESC, season_type;
+
+
+-- View: Prop Type Performance (by stat_type)
+CREATE OR REPLACE VIEW v_nba_sgp_prop_performance AS
+SELECT
+    l.stat_type,
+    l.direction,
+    COUNT(*) as total_picks,
+    SUM(CASE WHEN l.result = 'WIN' THEN 1 ELSE 0 END) as wins,
+    SUM(CASE WHEN l.result = 'LOSS' THEN 1 ELSE 0 END) as losses,
+    SUM(CASE WHEN l.result IN ('PUSH', 'VOID') THEN 1 ELSE 0 END) as pushes_voids,
+    SUM(CASE WHEN l.result IS NULL THEN 1 ELSE 0 END) as pending,
+    ROUND(100.0 * SUM(CASE WHEN l.result = 'WIN' THEN 1 ELSE 0 END)
+          / NULLIF(SUM(CASE WHEN l.result IN ('WIN', 'LOSS') THEN 1 ELSE 0 END), 0), 1) as win_rate,
+    ROUND(AVG(l.edge_pct)::numeric, 2) as avg_edge,
+    ROUND(AVG(l.confidence)::numeric, 3) as avg_confidence,
+    ROUND(AVG(l.line)::numeric, 1) as avg_line
+FROM nba_sgp_legs l
+GROUP BY l.stat_type, l.direction
+HAVING COUNT(*) >= 3
+ORDER BY win_rate DESC NULLS LAST, total_picks DESC;
 
 
 -- View: Signal Performance

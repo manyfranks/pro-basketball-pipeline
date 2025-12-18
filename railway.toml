@@ -10,23 +10,17 @@ numReplicas = 1
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# NOTE: No healthcheck - this is a cron job, not a web server
-# NOTE: No cron in railway.toml - Railway requires cron config via dashboard
+# Cron: 15:00 UTC = 10:00 AM ET (during EST) / 11:00 AM ET (during EDT)
+# Single daily run handles both settlement and SGP generation
+cronSchedule = "0 15 * * *"
+startCommand = "python -m scripts.nba_daily_orchestrator"
 
 # =============================================================================
-# RAILWAY DASHBOARD CONFIGURATION
+# CRON BEHAVIOR
 # =============================================================================
-# Configure ONE cron service in Railway dashboard:
-#
-# Service: nba-sgp-daily
-# Cron: 0 15 * * *  (15:00 UTC = 10:00 AM ET during EST)
-# Command: python -m scripts.nba_daily_orchestrator
-#
-# This single run handles both:
+# Daily run at 15:00 UTC handles:
 # 1. Settlement of yesterday's parlays
 # 2. SGP generation for today's games
-#
-# (Matches NHL pipeline pattern - one orchestrator, one cron)
 
 # =============================================================================
 # ENVIRONMENT VARIABLES (set in Railway dashboard)

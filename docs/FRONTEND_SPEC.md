@@ -10,6 +10,69 @@
 
 The NBA SGP Engine frontend provides a dashboard for viewing recommended parlays, tracking performance, and analyzing individual props.
 
+---
+
+## Data Connection
+
+### Supabase Setup
+
+```typescript
+// lib/supabase.ts
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+```
+
+### Environment Variables
+```
+NEXT_PUBLIC_SUPABASE_URL=https://njpxyhacwepyxrlargpu.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase dashboard>
+```
+
+### Key Queries
+
+```typescript
+// Today's parlays with legs
+const { data: parlays } = await supabase
+  .from('nba_sgp_parlays')
+  .select(`
+    *,
+    nba_sgp_legs (*),
+    nba_sgp_settlements (*)
+  `)
+  .eq('game_date', format(new Date(), 'yyyy-MM-dd'))
+  .order('created_at', { ascending: false })
+
+// Performance stats (last 30 days)
+const { data: stats } = await supabase
+  .from('v_nba_sgp_daily_summary')
+  .select('*')
+  .order('game_date', { ascending: false })
+  .limit(30)
+
+// Unsettled parlays (for "pending" status)
+const { data: pending } = await supabase
+  .from('nba_sgp_parlays')
+  .select('*, nba_sgp_legs(*)')
+  .is('nba_sgp_settlements', null)
+  .lt('game_date', format(new Date(), 'yyyy-MM-dd'))
+```
+
+### Database Tables
+
+| Table | Description |
+|-------|-------------|
+| `nba_sgp_parlays` | Parlay records (3 legs each) |
+| `nba_sgp_legs` | Individual prop bets |
+| `nba_sgp_settlements` | Win/loss results |
+| `v_nba_sgp_daily_summary` | Daily aggregated stats (view) |
+| `v_nba_sgp_player_performance` | Player-level performance (view) |
+
+---
+
 ## User Flows
 
 ### 1. Daily View (Primary)
@@ -104,6 +167,7 @@ User clicks calendar
 │  "High-scoring game expected (O/U 232). Davis  │
 │  averaging 13.8 rebounds in last 5 games vs    │
 │  BOS's weak interior defense..."               │
+│                                    [AI Generated]│
 ├─────────────────────────────────────────────────┤
 │  Combined: +425  |  Implied: 18.2%             │
 │  [Copy to Clipboard]  [Share]                   │
@@ -120,9 +184,11 @@ User clicks calendar
 │  OVERALL PERFORMANCE                            │
 │                                                 │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐         │
-│  │  59.3%  │  │  +$850  │  │  35     │         │
-│  │Win Rate │  │ Profit  │  │ Parlays │         │
+│  │  60.0%  │  │ +$35K   │  │  252    │         │
+│  │Leg Rate │  │ Profit  │  │ Parlays │         │
 │  └─────────┘  └─────────┘  └─────────┘         │
+│                                                 │
+│  Parlay Win Rate: 45.9% │ ROI: 151.9%          │
 │                                                 │
 │  PROFIT OVER TIME                               │
 │  [═══════════════════════════════════]         │
@@ -234,6 +300,104 @@ interface ResultBadgeProps {
 }
 
 // Colors: WIN (green), LOSS (red), PUSH (gray), VOID (gray), PENDING (blue)
+```
+
+---
+
+## Empty States & Edge Cases
+
+### No Games Today
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│          🏀  No NBA Games Today                 │
+│                                                 │
+│     The next games are scheduled for            │
+│     December 18, 2025                           │
+│                                                 │
+│     [View Historical Picks]                     │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### No Parlays Generated
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│     📊  No High-Confidence Picks Today          │
+│                                                 │
+│     12 games analyzed, but no props met our     │
+│     edge threshold (8%+ required)               │
+│                                                 │
+│     Check back closer to game time for          │
+│     updated lines and injury news.              │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Settlement Pending
+```
+┌─────────────────────────────────────────────────┐
+│  LAL @ BOS  •  IN PROGRESS                      │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  ⏳ Results pending...                          │
+│                                                 │
+│  Settlement available after game ends           │
+│  (typically by 11:00 PM ET)                     │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Void Parlay (Player DNP)
+```
+┌─────────────────────────────────────────────────┐
+│  LAL @ BOS  •  FINAL                            │
+├─────────────────────────────────────────────────┤
+│  ⚪ VOID  │  $0 (refunded)                       │
+│                                                 │
+│  ✅ Anthony Davis - Rebounds O 11.5             │
+│     Actual: 14  │  Result: WIN                  │
+│                                                 │
+│  ⚪ Jayson Tatum - Points O 28.5  [DNP]         │
+│     Did not play (injury)  │  Result: VOID     │
+│                                                 │
+│  ✅ LeBron James - Assists O 7.5                │
+│     Actual: 9   │  Result: WIN                  │
+│                                                 │
+│  ℹ️ Parlay voided due to player DNP             │
+└─────────────────────────────────────────────────┘
+```
+
+### Loading State
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│     ⟳ Loading today's picks...                  │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Error State
+```
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│     ⚠️  Unable to load picks                     │
+│                                                 │
+│     Please check your connection and try again  │
+│                                                 │
+│     [Retry]                                     │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Data Freshness Indicator
+Show when data was last updated:
+```
+┌─────────────────────────────────────────────────┐
+│  📅 December 17, 2025                           │
+│  Last updated: 10:15 AM ET          [Refresh ↻] │
+└─────────────────────────────────────────────────┘
 ```
 
 ---
@@ -385,3 +549,29 @@ const cacheConfig = {
 - [ ] Native mobile apps
 - [ ] Sportsbook integrations
 - [ ] AI chat assistant
+
+---
+
+## Implementation Notes
+
+### LLM-Generated Content
+The `thesis` field in parlays is generated by an LLM (OpenRouter/Gemini). Always display with an "AI Generated" indicator for transparency.
+
+### Pipeline Schedule
+- Parlays are generated once daily at **10:00 AM ET**
+- Settlement runs at the same time for previous day's games
+- Data does not update in real-time during games
+
+### Void Rate
+Historical void rate is ~8.8%. Common reasons:
+- Player DNP (Did Not Play) due to injury
+- Player traded mid-season
+- Game postponed
+
+### Current Performance (252 parlays backtested)
+| Metric | Value |
+|--------|-------|
+| Leg Hit Rate | 60.0% |
+| Parlay Win Rate | 45.9% |
+| ROI | 151.9% |
+| 95% Confidence Interval | 56.3% - 63.6% |

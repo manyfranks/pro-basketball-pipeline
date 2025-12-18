@@ -8,7 +8,84 @@
 
 ## Overview
 
-This document specifies the REST API for the NBA SGP Engine frontend integration.
+This document specifies the data access patterns for the NBA SGP Engine frontend integration.
+
+---
+
+## Data Access Options
+
+### Option A: Direct Supabase (Recommended for MVP)
+
+The simplest approach is querying Supabase directly using the `supabase-js` client. No backend API server required.
+
+**Environment Variables:**
+```
+NEXT_PUBLIC_SUPABASE_URL=https://njpxyhacwepyxrlargpu.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Supabase dashboard>
+```
+
+**Setup:**
+```typescript
+// lib/supabase.ts
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+```
+
+**Example Queries:**
+```typescript
+// Today's parlays with legs and settlements
+const { data: parlays } = await supabase
+  .from('nba_sgp_parlays')
+  .select(`
+    *,
+    nba_sgp_legs (*),
+    nba_sgp_settlements (*)
+  `)
+  .eq('game_date', '2025-12-17')
+  .order('created_at', { ascending: false })
+
+// Performance summary (last 30 days)
+const { data: performance } = await supabase
+  .from('v_nba_sgp_daily_summary')
+  .select('*')
+  .order('game_date', { ascending: false })
+  .limit(30)
+
+// Player history
+const { data: playerLegs } = await supabase
+  .from('nba_sgp_legs')
+  .select('*, nba_sgp_parlays!inner(game_date)')
+  .ilike('player_name', '%LeBron%')
+  .order('created_at', { ascending: false })
+```
+
+**Real-time Updates (Supabase Realtime):**
+```typescript
+// Subscribe to new settlements
+supabase
+  .channel('nba-settlements')
+  .on('postgres_changes', {
+    event: 'INSERT',
+    schema: 'public',
+    table: 'nba_sgp_settlements'
+  }, (payload) => {
+    console.log('New settlement:', payload.new)
+  })
+  .subscribe()
+```
+
+### Option B: REST API (Future Enhancement)
+
+If you need custom business logic, rate limiting, or caching, implement a REST API server. The endpoints below describe this approach.
+
+**Base URL**: `/api/v1`
+**Authentication**: Bearer token (header: `Authorization: Bearer <token>`)
+
+---
 
 ## Data Models
 
@@ -42,7 +119,7 @@ interface Parlay {
 ```typescript
 interface Leg {
   id: string;                    // UUID
-visiblelegNumber: number;              // 1, 2, 3
+  legNumber: number;             // 1, 2, 3
   playerName: string;            // e.g., 'LeBron James'
   playerId: number | null;       // NBA player ID
   team: string;                  // Team abbreviation
