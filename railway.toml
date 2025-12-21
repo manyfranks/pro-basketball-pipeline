@@ -10,19 +10,27 @@ numReplicas = 1
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Cron schedule is configured per-service in Railway UI
-# This allows multiple containers with different schedules
-# Example schedules:
-#   - Morning run: 0 15 * * * (15:00 UTC = 10:00 AM ET)
-#   - Evening run: 0 23 * * * (23:00 UTC = 6:00 PM ET)
-startCommand = "python -m scripts.nba_daily_orchestrator"
+# =============================================================================
+# CRON SCHEDULE - HOURLY SCHEDULER
+# =============================================================================
+# The scheduler runs hourly and checks if any jobs should run at the current hour.
+# This allows multiple run times from a single Railway service.
+#
+# Scheduled Jobs (all times UTC):
+#   - Morning (15:00 UTC = 10am ET): Settlement + SGP generation
+#   - Afternoon (19:00 UTC = 2pm ET): Final SGP after injury cutoff
+#
+# The scheduler handles time checks internally - only runs jobs at their scheduled hours.
+cronSchedule = "0 * * * *"
+startCommand = "python -m scheduler.nba_scheduler"
 
 # =============================================================================
 # CRON BEHAVIOR
 # =============================================================================
-# Daily run at 15:00 UTC handles:
-# 1. Settlement of yesterday's parlays
-# 2. SGP generation for today's games
+# Hourly cron triggers the scheduler, which checks current time and runs:
+#   - 15:00 UTC: Morning run (settlement + SGP generation)
+#   - 19:00 UTC: Afternoon run (SGP refresh after injury reports)
+# At all other hours, scheduler exits without running any jobs.
 
 # =============================================================================
 # ENVIRONMENT VARIABLES (set in Railway dashboard)
