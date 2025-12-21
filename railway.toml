@@ -10,9 +10,11 @@ numReplicas = 1
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Cron: 15:00 UTC = 10:00 AM ET (during EST) / 11:00 AM ET (during EDT)
-# Single daily run handles both settlement and SGP generation
-cronSchedule = "0 15 * * *"
+# Cron schedule is configured per-service in Railway UI
+# This allows multiple containers with different schedules
+# Example schedules:
+#   - Morning run: 0 15 * * * (15:00 UTC = 10:00 AM ET)
+#   - Evening run: 0 23 * * * (23:00 UTC = 6:00 PM ET)
 startCommand = "python -m scripts.nba_daily_orchestrator"
 
 # =============================================================================

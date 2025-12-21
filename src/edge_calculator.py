@@ -76,13 +76,15 @@ class EdgeCalculator:
     """
     Calculates edge on NBA player props using signal framework.
 
-    Signal weights (must sum to 1.0):
+    Signal weights (must sum to 1.0) - OPTIMIZED after backtest:
     - Line Value: 30% (core signal)
     - Trend: 20%
-    - Usage: 20%
+    - Correlation: 20% (increased from 5% - highest predictive value)
     - Matchup: 15%
-    - Environment: 10%
-    - Correlation: 5%
+    - Usage: 10% (reduced from 20% - underperformed)
+    - Environment: 5% (reduced from 10% - weakest signal)
+
+    See docs/LEARNINGS.md Section 7-8 for backtest analysis and rationale.
 
     Philosophy:
     - Trust market lines as baseline
