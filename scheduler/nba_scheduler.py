@@ -172,10 +172,10 @@ class NBAScheduler:
                 'description': 'Morning: Settlement + SGP generation',
             },
 
-            # Afternoon Run - 19:00 UTC = 2pm ET = 11am PT
+            # Afternoon Run - 21:00 UTC = 4pm ET = 1pm PT
             # Final SGP after injury reports
             'afternoon': {
-                'hour': 19,
+                'hour': 21,
                 'minute': 0,
                 'command': f'python -m scripts.nba_daily_orchestrator --generate-only --force-refresh',
                 'description': 'Afternoon: Final SGP after injury cutoff',
