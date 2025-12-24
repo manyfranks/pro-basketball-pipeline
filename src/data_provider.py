@@ -21,6 +21,8 @@ from nba_api.stats.endpoints import (
     leaguedashteamstats,
     teamgamelog,
     scoreboardv2,
+    playerdashptreb,
+    playerdashptpass,
 )
 from nba_api.stats.static import players, teams
 
@@ -461,6 +463,168 @@ class NBADataProvider:
             return 112.0
 
         return team_row['DEF_RATING'].iloc[0]
+
+    def get_team_rebounding_stats(self, team_id: int) -> Dict[str, float]:
+        """
+        Get team rebounding rates (OREB%, DREB%, REB%).
+
+        CRITICAL for rebounds signal - DEF_RATING alone is insufficient.
+
+        Returns:
+            Dict with oreb_pct, dreb_pct, reb_pct (0.0 to 1.0 scale)
+        """
+        df = self.get_team_stats()
+        if df.empty:
+            return {'oreb_pct': 0.25, 'dreb_pct': 0.75, 'reb_pct': 0.50}  # Fallback
+
+        team_row = df[df['TEAM_ID'] == team_id]
+        if team_row.empty:
+            return {'oreb_pct': 0.25, 'dreb_pct': 0.75, 'reb_pct': 0.50}
+
+        return {
+            'oreb_pct': team_row['OREB_PCT'].iloc[0] if 'OREB_PCT' in df.columns else 0.25,
+            'dreb_pct': team_row['DREB_PCT'].iloc[0] if 'DREB_PCT' in df.columns else 0.75,
+            'reb_pct': team_row['REB_PCT'].iloc[0] if 'REB_PCT' in df.columns else 0.50,
+        }
+
+    # =========================================================================
+    # PLAYER TRACKING DATA (PT = Player Tracking)
+    # =========================================================================
+
+    def get_player_rebound_tracking(self, player_id: int, team_id: int = 0) -> Optional[Dict]:
+        """
+        Get player rebound tracking data from playerdashptreb endpoint.
+
+        CRITICAL for rebounds prediction - shows contested vs uncontested,
+        rebound frequency, and opportunity rate.
+
+        Args:
+            player_id: NBA player ID
+            team_id: Team ID (optional, for filtering)
+
+        Returns:
+            Dict with rebound tracking metrics or None if unavailable
+        """
+        cache_key = f"reb_tracking_{player_id}_{self.SEASON}"
+
+        cached = self._get_cached(cache_key, 'player_gamelog')
+        if cached is not None:
+            return cached
+
+        self.rate_limiter.wait()
+        try:
+            tracking = playerdashptreb.PlayerDashPtReb(
+                player_id=player_id,
+                team_id=team_id,
+                season=self.SEASON,
+                season_type_all_star='Regular Season',
+                per_mode_simple='PerGame',
+                league_id='00',
+                last_n_games=0,
+                month=0,
+                opponent_team_id=0,
+                period=0,
+            )
+
+            # OverallRebounding dataset has the key metrics
+            dfs = tracking.get_data_frames()
+            if len(dfs) >= 2:
+                overall_df = dfs[1]  # OverallRebounding is second dataset
+                if not overall_df.empty:
+                    row = overall_df.iloc[0]
+                    result = {
+                        'games': row.get('G', 0),
+                        'reb_frequency': row.get('REB_FREQUENCY', 0),
+                        'oreb': row.get('OREB', 0),
+                        'dreb': row.get('DREB', 0),
+                        'reb': row.get('REB', 0),
+                        # Contested rebounds (harder to get)
+                        'c_oreb': row.get('C_OREB', 0),
+                        'c_dreb': row.get('C_DREB', 0),
+                        'c_reb': row.get('C_REB', 0),
+                        'c_reb_pct': row.get('C_REB_PCT', 0),
+                        # Uncontested rebounds (easier to get)
+                        'uc_oreb': row.get('UC_OREB', 0),
+                        'uc_dreb': row.get('UC_DREB', 0),
+                        'uc_reb': row.get('UC_REB', 0),
+                        'uc_reb_pct': row.get('UC_REB_PCT', 0),
+                    }
+                    self._set_cached(cache_key, result)
+                    return result
+
+            self._set_cached(cache_key, None)
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error fetching rebound tracking for player {player_id}: {e}")
+            self._set_cached(cache_key, None)
+            return None
+
+    def get_player_pass_tracking(self, player_id: int, team_id: int = 0) -> Optional[Dict]:
+        """
+        Get player pass tracking data from playerdashptpass endpoint.
+
+        Useful for assists prediction - shows potential assists, pass volume.
+
+        Args:
+            player_id: NBA player ID
+            team_id: Team ID (optional)
+
+        Returns:
+            Dict with pass tracking metrics or None if unavailable
+        """
+        cache_key = f"pass_tracking_{player_id}_{self.SEASON}"
+
+        cached = self._get_cached(cache_key, 'player_gamelog')
+        if cached is not None:
+            return cached
+
+        self.rate_limiter.wait()
+        try:
+            tracking = playerdashptpass.PlayerDashPtPass(
+                player_id=player_id,
+                team_id=team_id,
+                season=self.SEASON,
+                season_type_all_star='Regular Season',
+                per_mode_simple='PerGame',
+                league_id='00',
+                last_n_games=0,
+                month=0,
+                opponent_team_id=0,
+            )
+
+            # PassesMade dataset
+            dfs = tracking.get_data_frames()
+            if len(dfs) >= 1:
+                passes_df = dfs[0]  # PassesMade
+                if not passes_df.empty:
+                    # Aggregate all passes made
+                    total_passes = passes_df['PASS'].sum() if 'PASS' in passes_df.columns else 0
+                    total_ast = passes_df['AST'].sum() if 'AST' in passes_df.columns else 0
+                    total_fgm = passes_df['FGM'].sum() if 'FGM' in passes_df.columns else 0
+                    total_fga = passes_df['FGA'].sum() if 'FGA' in passes_df.columns else 0
+
+                    games = passes_df['G'].max() if 'G' in passes_df.columns else 1
+
+                    result = {
+                        'games': games,
+                        'passes_per_game': total_passes / games if games > 0 else 0,
+                        'ast_per_game': total_ast / games if games > 0 else 0,
+                        'potential_ast_per_game': total_fgm / games if games > 0 else 0,
+                        'pass_to_ast_rate': total_ast / total_passes if total_passes > 0 else 0,
+                        'pass_to_shot_rate': total_fga / total_passes if total_passes > 0 else 0,
+                        'shot_conversion_rate': total_fgm / total_fga if total_fga > 0 else 0,
+                    }
+                    self._set_cached(cache_key, result)
+                    return result
+
+            self._set_cached(cache_key, None)
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error fetching pass tracking for player {player_id}: {e}")
+            self._set_cached(cache_key, None)
+            return None
 
     # =========================================================================
     # HIGH-VALUE TARGET FILTER

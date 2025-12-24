@@ -4,8 +4,11 @@ Usage Signal (Weight: 10%)
 Analyzes player's usage rate and role in offense.
 High usage + good opportunity = potential edge.
 
+STAT-SPECIFIC BEHAVIOR:
+- Points/Threes/Assists: Usage rate is predictive
+- Rebounds: Usage rate is NOT predictive (47% hit rate) - use rebound frequency instead
+
 OPTIMIZED: Reduced from 20% to 10% based on backtest analysis.
-Usage signal showed only 56% hit rate - underperforming.
 """
 
 from .base import BaseSignal, SignalResult, PropContext
@@ -15,16 +18,17 @@ class UsageSignal(BaseSignal):
     """
     Evaluates player's offensive role and opportunity.
 
-    NBA context:
-    - Usage rate (USG%) = % of team plays used while on court
-    - High usage players are more predictable
-    - Minutes matter - more time = more opportunity
+    STAT-SPECIFIC LOGIC:
+    - For scoring stats (points, threes, fgm): Use USG% as primary metric
+    - For assists: Use USG% + pass tracking data
+    - For rebounds: SKIP USG% entirely, use rebound frequency if available
 
-    Note: Backtest showed this signal underperformed (56% hit rate).
-    Consider as supporting signal rather than primary driver.
+    Key insight from backtest:
+    - Usage signal for rebounds: 47% (worse than coin flip)
+    - Usage signal for points: 69% (solid)
     """
 
-    weight = 0.10  # Reduced from 0.20 - underperforming signal
+    weight = 0.10
     name = "usage"
 
     # Usage thresholds (league avg ~20%)
@@ -38,12 +42,16 @@ class UsageSignal(BaseSignal):
 
     def calculate(self, ctx: PropContext) -> SignalResult:
         """
-        Calculate usage signal.
+        Calculate usage signal with STAT-SPECIFIC LOGIC.
 
-        This signal is about opportunity and predictability:
-        - High usage + high minutes = good OVER candidate
-        - Low usage OR low minutes = uncertainty
+        For rebounds: Usage rate is anti-predictive (47% hit rate).
+        Use rebound frequency instead, or return neutral signal.
         """
+        # Special handling for rebounds - USG% doesn't apply
+        if ctx.stat_type == 'rebounds':
+            return self._calculate_rebounds_usage(ctx)
+
+        # Standard usage calculation for scoring/assists
         if ctx.usage_pct <= 0 or ctx.minutes_per_game <= 0:
             return SignalResult(
                 signal_type=self.name,
@@ -64,8 +72,6 @@ class UsageSignal(BaseSignal):
         opportunity_score = (usage_score * 0.6 + minutes_score * 0.4)
 
         # Compare line to what usage/minutes suggest
-        # This is subtle - we're not directly predicting over/under
-        # We're assessing if this player is a good candidate for props
         strength = self._evaluate_line_vs_opportunity(ctx, opportunity_score)
 
         confidence = self._calculate_confidence(ctx, usage_score, minutes_score)
@@ -98,6 +104,81 @@ class UsageSignal(BaseSignal):
                 'minutes_score': round(minutes_score, 3),
                 'opportunity_score': round(opportunity_score, 3),
             }
+        )
+
+    def _calculate_rebounds_usage(self, ctx: PropContext) -> SignalResult:
+        """
+        Calculate usage signal for REBOUNDS.
+
+        USG% is anti-predictive for rebounds (47% hit rate).
+        Instead, use rebound frequency data if available.
+        Otherwise, return a neutral/low-confidence signal based on minutes only.
+        """
+        # If we have rebound tracking data, use it
+        if ctx.reb_frequency > 0:
+            # High rebound frequency = good opportunity
+            # League average reb frequency is roughly 0.10-0.15
+            avg_reb_freq = 0.12
+            freq_diff = ctx.reb_frequency - avg_reb_freq
+
+            # Scale to strength
+            strength = freq_diff / 0.10  # 0.10 diff = 1.0 strength
+
+            # Adjust for contested vs uncontested
+            if ctx.uncontested_reb_pct > 0.6:
+                # Mostly uncontested = more predictable
+                strength *= 1.1
+            elif ctx.contested_reb_pct > 0.5:
+                # Mostly contested = less predictable
+                strength *= 0.8
+
+            confidence = 0.6 if ctx.reb_frequency > 0 else 0.3
+
+            if strength > 0:
+                direction = "High reb frequency → OVER"
+            elif strength < 0:
+                direction = "Low reb frequency → UNDER"
+            else:
+                direction = "Average opportunity"
+
+            evidence = f"Rebound frequency: {ctx.reb_frequency:.2f} → {direction}"
+
+            return SignalResult(
+                signal_type=self.name,
+                strength=self._clamp(strength),
+                confidence=confidence,
+                evidence=evidence,
+                raw_data={
+                    'reb_frequency': ctx.reb_frequency,
+                    'contested_pct': ctx.contested_reb_pct,
+                    'uncontested_pct': ctx.uncontested_reb_pct,
+                }
+            )
+
+        # No rebound tracking data - use minutes only with low confidence
+        if ctx.minutes_per_game > 0:
+            minutes_score = self._calculate_minutes_score(ctx.minutes_per_game)
+            # Very weak signal - just based on playing time
+            strength = (minutes_score - 0.5) * 0.3  # Reduce impact significantly
+
+            return SignalResult(
+                signal_type=self.name,
+                strength=self._clamp(strength),
+                confidence=0.3,  # Low confidence
+                evidence=f"Minutes only signal ({ctx.minutes_per_game:.1f} mpg) - no rebound tracking",
+                raw_data={
+                    'minutes_per_game': ctx.minutes_per_game,
+                    'usage_pct': ctx.usage_pct,
+                }
+            )
+
+        # No data at all
+        return SignalResult(
+            signal_type=self.name,
+            strength=0.0,
+            confidence=0.0,
+            evidence="No rebound opportunity data available",
+            raw_data=None
         )
 
     def _calculate_usage_score(self, usage_pct: float) -> float:

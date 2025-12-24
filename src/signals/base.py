@@ -89,6 +89,20 @@ class PropContext:
     opponent_def_rating: float = 112.0  # League avg ~112
     opponent_pace: float = 99.0  # League avg ~99
 
+    # Opponent rebounding context (CRITICAL for rebounds prediction)
+    opponent_oreb_pct: float = 0.25  # How often opponent gets offensive rebounds
+    opponent_dreb_pct: float = 0.75  # How often opponent gets defensive rebounds
+
+    # Player rebound tracking (from playerdashptreb)
+    reb_frequency: float = 0.0  # Rebound opportunities per game
+    contested_reb_pct: float = 0.0  # % of rebounds that are contested
+    uncontested_reb_pct: float = 0.0  # % of rebounds that are uncontested
+
+    # Player pass tracking (from playerdashptpass)
+    passes_per_game: float = 0.0  # Total passes made per game
+    pass_to_ast_rate: float = 0.0  # % of passes that become assists
+    potential_ast_per_game: float = 0.0  # Shots made off player's passes
+
     # Game context
     game_date: str = ''
     is_home: bool = True

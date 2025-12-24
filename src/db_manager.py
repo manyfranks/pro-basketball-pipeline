@@ -507,21 +507,27 @@ class NBASGPDBManager:
 
         return results
 
-    def get_signal_performance(self, season: Optional[int] = None) -> List[Dict]:
+    def get_signal_performance(
+        self,
+        season: Optional[int] = None,
+        min_strength: float = 0.05
+    ) -> List[Dict]:
         """
         Get performance by signal type.
 
-        Analyzes which signals are most predictive.
+        Analyzes which signals are most predictive by only counting
+        signals that had meaningful strength (|strength| >= min_strength).
 
         Args:
             season: Optional filter by season
+            min_strength: Minimum |strength| to count signal as active (default 0.05)
 
         Returns:
-            List of signal performance records
+            List of signal performance records with direction breakdown
         """
-        # Get all settled legs with signals
+        # Get all settled legs with signals and direction
         query = self.client.table("nba_sgp_legs").select(
-            "signals, result"
+            "signals, result, direction"
         ).not_.is_("result", "null").not_.is_("signals", "null")
 
         legs = query.execute().data
@@ -529,33 +535,178 @@ class NBASGPDBManager:
         if not legs:
             return []
 
-        # Aggregate by signal type
+        # Aggregate by signal type - only count signals with meaningful strength
         signal_stats = {}
         for leg in legs:
             if not leg.get("signals") or leg["result"] in ("VOID", "PUSH"):
                 continue
 
-            for signal_name in leg["signals"].keys():
-                if signal_name not in signal_stats:
-                    signal_stats[signal_name] = {"total": 0, "wins": 0}
+            leg_direction = leg.get("direction", "over")
+            leg_won = leg["result"] == "WIN"
 
-                signal_stats[signal_name]["total"] += 1
-                if leg["result"] == "WIN":
-                    signal_stats[signal_name]["wins"] += 1
+            for signal_name, strength in leg["signals"].items():
+                # Only count if signal had meaningful strength
+                if strength is None or abs(strength) < min_strength:
+                    continue
+
+                if signal_name not in signal_stats:
+                    signal_stats[signal_name] = {
+                        "total": 0,
+                        "wins": 0,
+                        "over_total": 0,
+                        "over_wins": 0,
+                        "under_total": 0,
+                        "under_wins": 0,
+                        "aligned_total": 0,  # Signal direction matched bet direction
+                        "aligned_wins": 0,
+                        "strength_sum": 0.0,
+                    }
+
+                stats = signal_stats[signal_name]
+                stats["total"] += 1
+                stats["strength_sum"] += abs(strength)
+
+                if leg_won:
+                    stats["wins"] += 1
+
+                # Track by direction
+                if leg_direction == "over":
+                    stats["over_total"] += 1
+                    if leg_won:
+                        stats["over_wins"] += 1
+                else:
+                    stats["under_total"] += 1
+                    if leg_won:
+                        stats["under_wins"] += 1
+
+                # Track alignment (signal direction matched bet direction)
+                signal_suggests_over = strength > 0
+                bet_was_over = leg_direction == "over"
+                if signal_suggests_over == bet_was_over:
+                    stats["aligned_total"] += 1
+                    if leg_won:
+                        stats["aligned_wins"] += 1
 
         # Format results
         results = []
         for signal_name, stats in signal_stats.items():
             if stats["total"] > 0:
-                results.append({
+                result = {
                     "signal_type": signal_name,
                     "total_legs": stats["total"],
                     "wins": stats["wins"],
                     "win_rate": stats["wins"] / stats["total"],
-                })
+                    "avg_strength": stats["strength_sum"] / stats["total"],
+                }
+
+                # Add direction breakdown if meaningful sample
+                if stats["over_total"] >= 5:
+                    result["over_win_rate"] = stats["over_wins"] / stats["over_total"]
+                if stats["under_total"] >= 5:
+                    result["under_win_rate"] = stats["under_wins"] / stats["under_total"]
+
+                # Add alignment rate (when signal agreed with bet direction)
+                if stats["aligned_total"] >= 5:
+                    result["aligned_win_rate"] = stats["aligned_wins"] / stats["aligned_total"]
+                    result["aligned_legs"] = stats["aligned_total"]
+
+                results.append(result)
 
         # Sort by win rate
         results.sort(key=lambda x: -x["win_rate"])
+
+        return results
+
+    def get_signal_performance_by_stat(
+        self,
+        min_strength: float = 0.05
+    ) -> Dict[str, List[Dict]]:
+        """
+        Get signal performance broken down by stat type.
+
+        Critical for understanding why certain stat types underperform.
+        For example: which signals work for points but fail for rebounds?
+
+        Args:
+            min_strength: Minimum |strength| to count signal as active
+
+        Returns:
+            Dict mapping stat_type -> list of signal performance records
+        """
+        # Get all settled legs with signals, direction, and stat_type
+        query = self.client.table("nba_sgp_legs").select(
+            "signals, result, direction, stat_type"
+        ).not_.is_("result", "null").not_.is_("signals", "null")
+
+        legs = query.execute().data
+
+        if not legs:
+            return {}
+
+        # Aggregate by stat_type -> signal_type
+        stat_signal_stats = {}
+
+        for leg in legs:
+            if not leg.get("signals") or leg["result"] in ("VOID", "PUSH"):
+                continue
+
+            stat_type = leg.get("stat_type", "unknown")
+            leg_direction = leg.get("direction", "over")
+            leg_won = leg["result"] == "WIN"
+
+            if stat_type not in stat_signal_stats:
+                stat_signal_stats[stat_type] = {}
+
+            for signal_name, strength in leg["signals"].items():
+                if strength is None or abs(strength) < min_strength:
+                    continue
+
+                if signal_name not in stat_signal_stats[stat_type]:
+                    stat_signal_stats[stat_type][signal_name] = {
+                        "total": 0,
+                        "wins": 0,
+                        "over_total": 0,
+                        "over_wins": 0,
+                        "under_total": 0,
+                        "under_wins": 0,
+                    }
+
+                stats = stat_signal_stats[stat_type][signal_name]
+                stats["total"] += 1
+                if leg_won:
+                    stats["wins"] += 1
+
+                if leg_direction == "over":
+                    stats["over_total"] += 1
+                    if leg_won:
+                        stats["over_wins"] += 1
+                else:
+                    stats["under_total"] += 1
+                    if leg_won:
+                        stats["under_wins"] += 1
+
+        # Format results
+        results = {}
+        for stat_type, signal_data in stat_signal_stats.items():
+            results[stat_type] = []
+            for signal_name, stats in signal_data.items():
+                if stats["total"] >= 3:  # Need minimum sample
+                    entry = {
+                        "signal_type": signal_name,
+                        "total": stats["total"],
+                        "wins": stats["wins"],
+                        "win_rate": stats["wins"] / stats["total"],
+                    }
+                    if stats["over_total"] >= 3:
+                        entry["over_win_rate"] = stats["over_wins"] / stats["over_total"]
+                        entry["over_total"] = stats["over_total"]
+                    if stats["under_total"] >= 3:
+                        entry["under_win_rate"] = stats["under_wins"] / stats["under_total"]
+                        entry["under_total"] = stats["under_total"]
+                    results[stat_type].append(entry)
+
+            # Sort by win rate
+            results[stat_type].sort(key=lambda x: -x["win_rate"])
 
         return results
 

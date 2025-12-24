@@ -565,7 +565,18 @@ class NBADailyOrchestrator:
 
                 # Calculate edge
                 edge_result = self.edge_calculator.calculate_edge(context)
+
+                # CRITICAL: Check both edge score AND recommendation
+                # The recommendation can be 'pass' even with good edge score
+                # (e.g., rebounds with neutral environment get filtered)
                 if edge_result and abs(edge_result.edge_score) >= 0.08:
+                    if edge_result.recommendation == 'pass':
+                        logger.debug(
+                            f"Filtered {prop.player_name} {prop.stat_type}: "
+                            f"edge={edge_result.edge_score:.3f} but recommendation=pass"
+                        )
+                        continue
+
                     edges.append({
                         'prop': prop,
                         'edge': edge_result,
@@ -576,7 +587,9 @@ class NBADailyOrchestrator:
 
         print(f"    Enriched {enriched_count}/{len(available_props)} props")
 
-        print(f"    Props with edge: {len(edges)}")
+        # Count filtered for monitoring
+        filtered_count = enriched_count - len(edges)
+        print(f"    Props with edge: {len(edges)} (filtered: {filtered_count})")
 
         if len(edges) < 3:
             logger.info(f"Not enough edges for {away_team}@{home_team}")
@@ -612,6 +625,11 @@ class NBADailyOrchestrator:
             odds = prop.over_odds if edge.direction == 'over' else prop.under_odds
             implied_prob = prop.over_implied_prob if edge.direction == 'over' else prop.under_implied_prob
 
+            # Get signal values for tracking
+            signal_dict = {s.signal_type: round(s.strength, 3) for s in edge.signals}
+            env_signal = signal_dict.get('environment', 0)
+            matchup_signal = signal_dict.get('matchup', 0)
+
             leg = {
                 'leg_number': i,
                 'player_name': prop.player_name,
@@ -629,11 +647,20 @@ class NBADailyOrchestrator:
                 'primary_reason': edge.recommendation,
                 'supporting_reasons': [s.evidence for s in edge.signals if s.strength != 0][:3],
                 'risk_factors': [s.evidence for s in edge.signals if s.strength * edge.edge_score < 0][:2],
-                'signals': {s.signal_type: round(s.strength, 3) for s in edge.signals},
+                'signals': signal_dict,
                 'pipeline_score': round(edge.edge_score * 100, 2),
                 'pipeline_confidence': self._confidence_tier(edge.confidence),
                 'pipeline_rank': i,
             }
+
+            # Log key filter decisions for monitoring
+            if prop.stat_type == 'rebounds':
+                env_aligned = (edge.direction == 'over' and env_signal > 0) or \
+                              (edge.direction == 'under' and env_signal < 0)
+                logger.info(
+                    f"REBOUNDS PICK: {prop.player_name} {edge.direction} {prop.line} | "
+                    f"env={env_signal:.2f} aligned={env_aligned}"
+                )
             legs.append(leg)
 
             # Multiply implied probabilities for parlay odds

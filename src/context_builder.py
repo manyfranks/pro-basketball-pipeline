@@ -44,6 +44,11 @@ class ContextBuilder:
         # Cache team stats
         self._team_def_ratings: Dict[int, float] = {}
         self._team_paces: Dict[int, float] = {}
+        self._team_rebounding: Dict[int, Dict[str, float]] = {}
+
+        # Cache player tracking data
+        self._player_reb_tracking: Dict[int, Dict] = {}
+        self._player_pass_tracking: Dict[int, Dict] = {}
 
     @property
     def data_provider(self):
@@ -107,6 +112,13 @@ class ContextBuilder:
         opp_def_rating = self._get_team_def_rating(opponent_team_id)
         opp_pace = self._get_team_pace(opponent_team_id)
 
+        # Get opponent rebounding stats (CRITICAL for rebounds props)
+        opp_reb_stats = self._get_team_rebounding(opponent_team_id)
+
+        # Get player tracking data for rebounds/assists
+        reb_tracking = self._get_player_reb_tracking(player_ctx.player_id, player_ctx.team_id)
+        pass_tracking = self._get_player_pass_tracking(player_ctx.player_id, player_ctx.team_id)
+
         # Get schedule context (B2B, 3-in-4)
         if game_date is None:
             game_date = datetime.now(ET).strftime('%Y-%m-%d')
@@ -141,6 +153,18 @@ class ContextBuilder:
             opponent_team_id=opponent_team_id,
             opponent_def_rating=opp_def_rating,
             opponent_pace=opp_pace,
+            # Opponent rebounding (CRITICAL for rebounds)
+            opponent_oreb_pct=opp_reb_stats.get('oreb_pct', 0.25),
+            opponent_dreb_pct=opp_reb_stats.get('dreb_pct', 0.75),
+            # Player rebound tracking
+            reb_frequency=reb_tracking.get('reb_frequency', 0.0) if reb_tracking else 0.0,
+            contested_reb_pct=reb_tracking.get('c_reb_pct', 0.0) if reb_tracking else 0.0,
+            uncontested_reb_pct=reb_tracking.get('uc_reb_pct', 0.0) if reb_tracking else 0.0,
+            # Player pass tracking
+            passes_per_game=pass_tracking.get('passes_per_game', 0.0) if pass_tracking else 0.0,
+            pass_to_ast_rate=pass_tracking.get('pass_to_ast_rate', 0.0) if pass_tracking else 0.0,
+            potential_ast_per_game=pass_tracking.get('potential_ast_per_game', 0.0) if pass_tracking else 0.0,
+            # Game context
             game_date=game_date,
             is_home=is_home,
             is_b2b=is_b2b,
@@ -226,6 +250,45 @@ class ContextBuilder:
             logger.debug(f"Failed to get pace for team {team_id}: {e}")
             return 99.0  # League average fallback
 
+    def _get_team_rebounding(self, team_id: int) -> Dict[str, float]:
+        """Get team rebounding rates with caching."""
+        if team_id in self._team_rebounding:
+            return self._team_rebounding[team_id]
+
+        try:
+            reb_stats = self.data_provider.get_team_rebounding_stats(team_id)
+            self._team_rebounding[team_id] = reb_stats
+            return reb_stats
+        except Exception as e:
+            logger.debug(f"Failed to get rebounding for team {team_id}: {e}")
+            return {'oreb_pct': 0.25, 'dreb_pct': 0.75, 'reb_pct': 0.50}
+
+    def _get_player_reb_tracking(self, player_id: int, team_id: int) -> Optional[Dict]:
+        """Get player rebound tracking data with caching."""
+        if player_id in self._player_reb_tracking:
+            return self._player_reb_tracking[player_id]
+
+        try:
+            tracking = self.data_provider.get_player_rebound_tracking(player_id, team_id)
+            self._player_reb_tracking[player_id] = tracking
+            return tracking
+        except Exception as e:
+            logger.debug(f"Failed to get rebound tracking for player {player_id}: {e}")
+            return None
+
+    def _get_player_pass_tracking(self, player_id: int, team_id: int) -> Optional[Dict]:
+        """Get player pass tracking data with caching."""
+        if player_id in self._player_pass_tracking:
+            return self._player_pass_tracking[player_id]
+
+        try:
+            tracking = self.data_provider.get_player_pass_tracking(player_id, team_id)
+            self._player_pass_tracking[player_id] = tracking
+            return tracking
+        except Exception as e:
+            logger.debug(f"Failed to get pass tracking for player {player_id}: {e}")
+            return None
+
     def _get_stat_average(self, player_ctx, stat_type: str, period: str) -> float:
         """
         Get average for a specific stat type.
@@ -306,6 +369,9 @@ class ContextBuilder:
         self._player_cache.clear()
         self._team_def_ratings.clear()
         self._team_paces.clear()
+        self._team_rebounding.clear()
+        self._player_reb_tracking.clear()
+        self._player_pass_tracking.clear()
 
 
 # Singleton instance
