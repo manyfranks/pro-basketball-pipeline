@@ -284,46 +284,64 @@ class EdgeCalculator:
             return 'pass'
 
         # =================================================================
-        # STAT-SPECIFIC FILTERING (based on backtest data)
+        # STAT-SPECIFIC FILTERING (based on post-deployment analysis)
         # =================================================================
 
-        # REBOUNDS: CRITICAL FILTERING based on backtest data
-        # - Overs with positive env: 76.5% hit rate
-        # - Overs with neutral env: 31.4% hit rate (TERRIBLE!)
-        # - Only take rebounds when env aligns with direction
-        if ctx.stat_type == 'rebounds':
-            env_signal = self._get_signal_strength(signal_results, 'environment')
+        env_signal = self._get_signal_strength(signal_results, 'environment')
+        env_suggests_over = env_signal > 0 if env_signal else None
 
-            # If no environment signal, PASS (neutral env = 31% on overs!)
+        # -----------------------------------------------------------------
+        # FIX 1: PR COMBO - 0% HIT RATE, FILTER ENTIRELY
+        # -----------------------------------------------------------------
+        if ctx.stat_type == 'pr':
+            return 'pass'  # PR combo is unpredictable (0/7 = 0%)
+
+        # -----------------------------------------------------------------
+        # FIX 2: REQUIRE ENV ALIGNMENT FOR ALL REBOUND-RELATED STATS
+        # Applies to: rebounds, ra (rebounds+assists), pra (points+rebounds+assists)
+        # -----------------------------------------------------------------
+        if ctx.stat_type in ('rebounds', 'ra', 'pra'):
+            # Require non-neutral environment
             if env_signal is None or abs(env_signal) < 0.05:
                 return 'pass'
 
-            env_suggests_over = env_signal > 0
+            # Require alignment
+            if direction == 'over' and not env_suggests_over:
+                return 'pass'
+            if direction == 'under' and env_suggests_over:
+                return 'pass'
 
-            if direction == 'over':
-                # OVERS: Require positive environment (76.5% hit rate)
-                if not env_suggests_over:
-                    return 'pass'  # Environment suggests under, don't bet over
-                # Environment aligns - this is our best scenario!
-                if abs_edge >= self.MIN_EDGE and confidence >= 0.40:
-                    if abs_edge >= self.MODERATE_EDGE:
-                        return 'strong_over'  # High confidence pick
-                    return 'lean_over'
+            # For pure rebounds, use tighter thresholds
+            if ctx.stat_type == 'rebounds':
+                if direction == 'over':
+                    if abs_edge >= self.MIN_EDGE and confidence >= 0.40:
+                        return 'strong_over' if abs_edge >= self.MODERATE_EDGE else 'lean_over'
+                else:  # under
+                    if abs_edge >= self.MODERATE_EDGE and confidence >= 0.50:
+                        return 'lean_under'
+                return 'pass'
 
-            else:  # direction == 'under'
-                # UNDERS: Require negative environment (55% hit rate)
-                if env_suggests_over:
-                    return 'pass'  # Environment suggests over, don't bet under
-                # Environment aligns with under
-                if abs_edge >= self.MODERATE_EDGE and confidence >= 0.50:
-                    return f'lean_under'
+        # -----------------------------------------------------------------
+        # FIX 3: PA COMBO - REQUIRE HIGHER EDGE (treated like assists)
+        # -----------------------------------------------------------------
+        if ctx.stat_type == 'pa':
+            if abs_edge < self.MODERATE_EDGE:
+                return 'pass'
 
-        # ASSISTS: Require higher edge threshold (61.8% base rate, need to be selective)
-        # Not enough data to implement signal-based filtering (only 11 legs for key finding)
-        # Just raise the bar until we have more forward data
-        elif ctx.stat_type == 'assists':
+        # -----------------------------------------------------------------
+        # ASSISTS: Require higher edge threshold
+        # -----------------------------------------------------------------
+        if ctx.stat_type == 'assists':
             if abs_edge < self.MODERATE_EDGE:  # Require 0.15 instead of 0.08
                 return 'pass'
+
+        # -----------------------------------------------------------------
+        # FIX 4: POINTS - REQUIRE NON-NEUTRAL ENVIRONMENT
+        # Post-deploy: many losses had env=0.000 (neutral)
+        # -----------------------------------------------------------------
+        if ctx.stat_type == 'points':
+            if env_signal is None or abs(env_signal) < 0.04:
+                return 'pass'  # Neutral environment = unpredictable
 
         # =================================================================
         # STANDARD RECOMMENDATION LOGIC
